@@ -3,6 +3,7 @@
  * Never execute arbitrary shell commands — only allowlisted tools.
  */
 import { config } from "../config/env.js";
+import { getSkill } from "../skills/loader.js";
 import { log } from "../utils/log.js";
 
 /**
@@ -48,4 +49,18 @@ export function tryAdminAuth(userId: number, passphrase: string): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Combined permission check: tool must be on the allowlist,
+ * and if the skill is marked adminOnly, the user must be an admin.
+ */
+export function isToolPermitted(toolName: string, userId: number): boolean {
+  if (!isToolAllowed(toolName)) return false;
+  const skill = getSkill(toolName);
+  if (skill?.adminOnly && !isAdmin(userId)) {
+    log.warn(`Non-admin user ${userId} blocked from admin tool: ${toolName}`);
+    return false;
+  }
+  return true;
 }

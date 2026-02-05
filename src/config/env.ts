@@ -27,9 +27,14 @@ export const config = {
   allowedUsers: csvList("TELEGRAM_ALLOWED_USERS").map(Number),
   sandboxDir: optional("SANDBOX_DIR", "./sandbox"),
   claudeBin: optional("CLAUDE_BIN", "claude"),
-  allowedTools: csvList("CLAUDE_ALLOWED_TOOLS", "help,notes.*,files.*"),
+  allowedTools: csvList(
+    "CLAUDE_ALLOWED_TOOLS",
+    "help,notes.*,files.*,web.fetch,system.*,shell.exec"
+  ),
   memoryTurns: Number(optional("MEMORY_TURNS", "12")),
   rateLimitMs: Number(optional("RATE_LIMIT_MS", "2000")),
+  maxToolChain: Number(optional("MAX_TOOL_CHAIN", "5")),
+  shellTimeout: Number(optional("SHELL_TIMEOUT_MS", "30000")),
   logLevel: optional("LOG_LEVEL", "info") as
     | "debug"
     | "info"

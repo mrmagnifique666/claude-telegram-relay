@@ -16,6 +16,8 @@ export interface Skill {
   description: string;
   /** JSON schema for args validation */
   argsSchema: ToolSchema;
+  /** If true, only admin users can invoke this skill */
+  adminOnly?: boolean;
   /** Execute the skill and return a text result */
   execute(args: Record<string, unknown>): Promise<string>;
 }
@@ -24,7 +26,7 @@ const registry = new Map<string, Skill>();
 
 export function registerSkill(skill: Skill): void {
   registry.set(skill.name, skill);
-  log.debug(`Registered skill: ${skill.name}`);
+  log.debug(`Registered skill: ${skill.name}${skill.adminOnly ? " (admin)" : ""}`);
 }
 
 export function getSkill(name: string): Skill | undefined {
@@ -64,15 +66,17 @@ export function validateArgs(
 
 /**
  * Generate a text block describing all available tools for the LLM prompt.
+ * Filters out admin-only tools when the user is not an admin.
  */
-export function getToolCatalogPrompt(): string {
-  const skills = getAllSkills();
+export function getToolCatalogPrompt(isAdmin: boolean = false): string {
+  const skills = getAllSkills().filter((s) => !s.adminOnly || isAdmin);
   if (skills.length === 0) return "";
   const lines = skills.map((s) => {
     const params = Object.entries(s.argsSchema.properties)
       .map(([k, v]) => `${k}: ${v.type}${v.description ? ` — ${v.description}` : ""}`)
       .join(", ");
-    return `- ${s.name}(${params}): ${s.description}`;
+    const tag = s.adminOnly ? " [ADMIN]" : "";
+    return `- ${s.name}(${params}): ${s.description}${tag}`;
   });
   return lines.join("\n");
 }
@@ -85,5 +89,9 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/help.js");
   await import("./builtin/notes.js");
   await import("./builtin/files.js");
+  await import("./builtin/filewrite.js");
+  await import("./builtin/shell.js");
+  await import("./builtin/web.js");
+  await import("./builtin/system.js");
   log.info(`Loaded ${registry.size} built-in skills.`);
 }

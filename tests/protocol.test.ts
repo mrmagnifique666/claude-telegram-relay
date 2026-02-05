@@ -63,7 +63,7 @@ describe("parseClaudeOutput", () => {
 });
 
 describe("isToolAllowed", () => {
-  // Allowlist from env: "help,notes.*,files.*"
+  // Allowlist from env: "help,notes.*,files.*,web.fetch,system.*,shell.exec"
 
   it("allows an exact match", () => {
     expect(isToolAllowed("help")).toBe(true);
@@ -73,10 +73,17 @@ describe("isToolAllowed", () => {
     expect(isToolAllowed("notes.add")).toBe(true);
     expect(isToolAllowed("notes.list")).toBe(true);
     expect(isToolAllowed("files.read")).toBe(true);
+    expect(isToolAllowed("system.info")).toBe(true);
+    expect(isToolAllowed("system.kill")).toBe(true);
+  });
+
+  it("allows exact match for new tools", () => {
+    expect(isToolAllowed("shell.exec")).toBe(true);
+    expect(isToolAllowed("web.fetch")).toBe(true);
   });
 
   it("rejects an unknown tool", () => {
-    expect(isToolAllowed("shell.exec")).toBe(false);
+    expect(isToolAllowed("danger.exec")).toBe(false);
   });
 
   it("rejects a tool that partially matches but is not in allowlist", () => {

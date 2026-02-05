@@ -4,28 +4,8 @@
  * Never allows writing, deleting, or escaping the sandbox.
  */
 import fs from "node:fs";
-import path from "node:path";
 import { registerSkill } from "../loader.js";
-import { config } from "../../config/env.js";
-import { log } from "../../utils/log.js";
-
-/**
- * Resolve a user-provided path and ensure it stays within the sandbox.
- * Returns null if the path escapes.
- */
-function safePath(userPath: string): string | null {
-  const sandbox = path.resolve(config.sandboxDir);
-  // Ensure sandbox exists
-  if (!fs.existsSync(sandbox)) {
-    fs.mkdirSync(sandbox, { recursive: true });
-  }
-  const resolved = path.resolve(sandbox, userPath);
-  if (!resolved.startsWith(sandbox)) {
-    log.warn(`Path escape attempt blocked: ${userPath}`);
-    return null;
-  }
-  return resolved;
-}
+import { safeSandboxPath } from "../../utils/paths.js";
 
 registerSkill({
   name: "files.list",
@@ -37,7 +17,7 @@ registerSkill({
     },
   },
   async execute(args): Promise<string> {
-    const dir = safePath((args.dir as string) || ".");
+    const dir = safeSandboxPath((args.dir as string) || ".");
     if (!dir) return "Error: path is outside the sandbox.";
     if (!fs.existsSync(dir)) return "Directory does not exist.";
     const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -59,7 +39,7 @@ registerSkill({
     required: ["path"],
   },
   async execute(args): Promise<string> {
-    const filePath = safePath(args.path as string);
+    const filePath = safeSandboxPath(args.path as string);
     if (!filePath) return "Error: path is outside the sandbox.";
     if (!fs.existsSync(filePath)) return "File not found.";
     const stat = fs.statSync(filePath);

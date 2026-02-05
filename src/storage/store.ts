@@ -14,7 +14,7 @@ export interface Turn {
 
 let db: Database.Database;
 
-function getDb(): Database.Database {
+export function getDb(): Database.Database {
   if (!db) {
     const dbPath = path.resolve("relay.db");
     db = new Database(dbPath);
@@ -28,6 +28,12 @@ function getDb(): Database.Database {
         created_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
       CREATE INDEX IF NOT EXISTS idx_turns_chat ON turns(chat_id, id);
+
+      CREATE TABLE IF NOT EXISTS notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text TEXT NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
     `);
     log.info(`SQLite store initialised at ${dbPath}`);
   }
