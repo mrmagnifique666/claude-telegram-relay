@@ -1,0 +1,26 @@
+{
+  "name": "claude-telegram-relay",
+  "version": "1.0.0",
+  "description": "Self-hosted Telegram relay for Claude Code CLI",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "dev:node": "tsx --watch src/index.ts",
+    "start:node": "tsx src/index.ts",
+    "test": "bun test",
+    "test:node": "node --experimental-vm-modules node_modules/.bin/vitest run"
+  },
+  "dependencies": {
+    "grammy": "^1.30.0",
+    "dotenv": "^16.4.7",
+    "better-sqlite3": "^11.7.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/bun": "^1.1.14",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
