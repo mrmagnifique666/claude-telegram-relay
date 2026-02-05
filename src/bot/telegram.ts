@@ -1,14 +1,16 @@
 /**
  * Telegram bot setup using grammY with long polling.
- * Handles text messages, user allowlist checks, and rate limiting.
+ * Handles text messages, photos, documents, user allowlist checks, and rate limiting.
  * Sends messages with HTML parse mode and converts markdown code blocks.
  */
 import { Bot } from "grammy";
+import fs from "node:fs";
+import path from "node:path";
 import { config } from "../config/env.js";
 import { isUserAllowed, tryAdminAuth } from "../security/policy.js";
 import { consumeToken } from "../security/rateLimit.js";
 import { handleMessage } from "../orchestrator/router.js";
-import { clearTurns } from "../storage/store.js";
+import { clearTurns, clearSession } from "../storage/store.js";
 import { log } from "../utils/log.js";
 
 const MAX_TG_MESSAGE = 4096;
@@ -41,6 +43,29 @@ function mdToHtml(text: string): string {
   return html;
 }
 
+/**
+ * Download a Telegram file to the uploads directory.
+ * Returns the local file path.
+ */
+async function downloadTelegramFile(
+  bot: Bot,
+  fileId: string,
+  filename: string
+): Promise<string> {
+  const file = await bot.api.getFile(fileId);
+  const filePath = file.file_path;
+  if (!filePath) throw new Error("Telegram returned no file_path");
+
+  const url = `https://api.telegram.org/file/bot${config.telegramToken}/${filePath}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Failed to download file: ${resp.status}`);
+
+  const buffer = Buffer.from(await resp.arrayBuffer());
+  const localPath = path.resolve(config.uploadsDir, filename);
+  fs.writeFileSync(localPath, buffer);
+  return localPath;
+}
+
 export function createBot(): Bot {
   const bot = new Bot(config.telegramToken);
 
@@ -60,7 +85,8 @@ export function createBot(): Bot {
   bot.command("clear", async (ctx) => {
     const chatId = ctx.chat.id;
     clearTurns(chatId);
-    await ctx.reply("Conversation history cleared.");
+    clearSession(chatId);
+    await ctx.reply("Conversation history and session cleared.");
   });
 
   bot.command("help", async (ctx) => {
@@ -130,27 +156,94 @@ export function createBot(): Bot {
     }
   });
 
-  // --- Voice message stub (behind feature flag) ---
-  if (config.featureVoice) {
-    bot.on("message:voice", async (ctx) => {
-      const userId = ctx.from?.id;
-      if (!userId || !isUserAllowed(userId)) return;
-      await ctx.reply(
-        "Voice message received. Transcription is not yet implemented — please send text instead."
-      );
-    });
-  }
+  // --- Photo handler ---
 
-  // --- Image/file stub (behind feature flag) ---
-  if (config.featureImage) {
-    bot.on("message:photo", async (ctx) => {
-      const userId = ctx.from?.id;
-      if (!userId || !isUserAllowed(userId)) return;
-      await ctx.reply(
-        "Image received. Image processing is not yet implemented — please send text instead."
-      );
-    });
-  }
+  bot.on("message:photo", async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId || !isUserAllowed(userId)) {
+      await ctx.reply("You are not authorised to use this bot.");
+      return;
+    }
+    if (!consumeToken(userId)) {
+      await ctx.reply("Slow down! Please wait a moment before sending another message.");
+      return;
+    }
+
+    const chatId = ctx.chat.id;
+    const caption = ctx.message.caption || "";
+    // Telegram provides multiple sizes — take the largest (last)
+    const photos = ctx.message.photo;
+    const largest = photos[photos.length - 1];
+
+    await ctx.replyWithChatAction("typing");
+
+    let localPath: string | undefined;
+    try {
+      const filename = `photo_${chatId}_${Date.now()}.jpg`;
+      localPath = await downloadTelegramFile(bot, largest.file_id, filename);
+      log.info(`Downloaded photo to ${localPath}`);
+
+      const message = `[Image: ${localPath}]\n${caption}`.trim();
+      const response = await handleMessage(chatId, message, userId);
+      await sendLong(ctx, response);
+    } catch (err) {
+      log.error("Error handling photo:", err);
+      await ctx.reply("Sorry, something went wrong processing your photo.");
+    } finally {
+      if (localPath && fs.existsSync(localPath)) {
+        fs.unlinkSync(localPath);
+      }
+    }
+  });
+
+  // --- Document handler ---
+
+  bot.on("message:document", async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId || !isUserAllowed(userId)) {
+      await ctx.reply("You are not authorised to use this bot.");
+      return;
+    }
+    if (!consumeToken(userId)) {
+      await ctx.reply("Slow down! Please wait a moment before sending another message.");
+      return;
+    }
+
+    const chatId = ctx.chat.id;
+    const caption = ctx.message.caption || "";
+    const doc = ctx.message.document;
+    const originalName = doc.file_name || `file_${Date.now()}`;
+
+    await ctx.replyWithChatAction("typing");
+
+    let localPath: string | undefined;
+    try {
+      const filename = `doc_${chatId}_${Date.now()}_${originalName}`;
+      localPath = await downloadTelegramFile(bot, doc.file_id, filename);
+      log.info(`Downloaded document to ${localPath}`);
+
+      const message = `[File: ${localPath}]\n${caption}`.trim();
+      const response = await handleMessage(chatId, message, userId);
+      await sendLong(ctx, response);
+    } catch (err) {
+      log.error("Error handling document:", err);
+      await ctx.reply("Sorry, something went wrong processing your file.");
+    } finally {
+      if (localPath && fs.existsSync(localPath)) {
+        fs.unlinkSync(localPath);
+      }
+    }
+  });
+
+  // --- Voice message handler ---
+
+  bot.on("message:voice", async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId || !isUserAllowed(userId)) return;
+    await ctx.reply(
+      "Voice message received. Transcription is not yet implemented — please send text instead."
+    );
+  });
 
   // Error handler
   bot.catch((err) => {

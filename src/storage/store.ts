@@ -34,6 +34,12 @@ export function getDb(): Database.Database {
         text TEXT NOT NULL,
         created_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
+
+      CREATE TABLE IF NOT EXISTS sessions (
+        chat_id INTEGER PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
     `);
     log.info(`SQLite store initialised at ${dbPath}`);
   }
@@ -77,4 +83,27 @@ export function clearTurns(chatId: number): void {
   const d = getDb();
   d.prepare("DELETE FROM turns WHERE chat_id = ?").run(chatId);
   log.info(`Cleared conversation for chat ${chatId}`);
+}
+
+export function getSession(chatId: number): string | null {
+  const d = getDb();
+  const row = d
+    .prepare("SELECT session_id FROM sessions WHERE chat_id = ?")
+    .get(chatId) as { session_id: string } | undefined;
+  return row?.session_id ?? null;
+}
+
+export function saveSession(chatId: number, sessionId: string): void {
+  const d = getDb();
+  d.prepare(
+    `INSERT INTO sessions (chat_id, session_id, updated_at) VALUES (?, ?, unixepoch())
+     ON CONFLICT(chat_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at`
+  ).run(chatId, sessionId);
+  log.debug(`Saved session ${sessionId} for chat ${chatId}`);
+}
+
+export function clearSession(chatId: number): void {
+  const d = getDb();
+  d.prepare("DELETE FROM sessions WHERE chat_id = ?").run(chatId);
+  log.debug(`Cleared session for chat ${chatId}`);
 }

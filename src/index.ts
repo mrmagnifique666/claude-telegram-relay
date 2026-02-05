@@ -13,6 +13,62 @@ import { createBot } from "./bot/telegram.js";
 import fs from "node:fs";
 import path from "node:path";
 
+const LOCK_FILE = path.resolve(config.relayDir, "bot.lock");
+
+interface LockData {
+  pid: number;
+  timestamp: string;
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireLock(): void {
+  if (fs.existsSync(LOCK_FILE)) {
+    try {
+      const raw = fs.readFileSync(LOCK_FILE, "utf-8");
+      const lock: LockData = JSON.parse(raw);
+      if (isPidAlive(lock.pid)) {
+        console.error(
+          `Another instance is already running (PID ${lock.pid}, started ${lock.timestamp}).\n` +
+          `If this is incorrect, delete ${LOCK_FILE} and try again.`
+        );
+        process.exit(1);
+      }
+      log.warn(`Removing stale lock file (PID ${lock.pid} is not running)`);
+    } catch {
+      log.warn("Removing unreadable lock file");
+    }
+    fs.unlinkSync(LOCK_FILE);
+  }
+
+  const data: LockData = { pid: process.pid, timestamp: new Date().toISOString() };
+  fs.writeFileSync(LOCK_FILE, JSON.stringify(data, null, 2));
+  log.debug(`Lock file created: PID ${process.pid}`);
+}
+
+function releaseLock(): void {
+  try {
+    if (fs.existsSync(LOCK_FILE)) {
+      const raw = fs.readFileSync(LOCK_FILE, "utf-8");
+      const lock: LockData = JSON.parse(raw);
+      // Only remove if it's our lock
+      if (lock.pid === process.pid) {
+        fs.unlinkSync(LOCK_FILE);
+        log.debug("Lock file removed");
+      }
+    }
+  } catch {
+    // Best-effort cleanup
+  }
+}
+
 async function main() {
   // Configure logging
   setLogLevel(config.logLevel);
@@ -28,12 +84,28 @@ async function main() {
   log.info(`Memory turns: ${config.memoryTurns}`);
   log.info(`Rate limit: ${config.rateLimitMs}ms`);
 
-  // Ensure sandbox directory exists
-  const sandboxPath = path.resolve(config.sandboxDir);
-  if (!fs.existsSync(sandboxPath)) {
-    fs.mkdirSync(sandboxPath, { recursive: true });
-    log.info(`Created sandbox directory: ${sandboxPath}`);
+  // Ensure directories exist
+  for (const dir of [config.sandboxDir, config.relayDir, config.uploadsDir]) {
+    const resolved = path.resolve(dir);
+    if (!fs.existsSync(resolved)) {
+      fs.mkdirSync(resolved, { recursive: true });
+      log.info(`Created directory: ${resolved}`);
+    }
   }
+
+  // Acquire lock file (exits if another instance is running)
+  acquireLock();
+
+  // Register cleanup handlers
+  process.on("exit", releaseLock);
+  process.on("SIGINT", () => {
+    releaseLock();
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    releaseLock();
+    process.exit(0);
+  });
 
   // Load skills
   await loadBuiltinSkills();
@@ -50,6 +122,7 @@ async function main() {
 }
 
 main().catch((err) => {
+  releaseLock();
   console.error("Fatal error:", err);
   process.exit(1);
 });

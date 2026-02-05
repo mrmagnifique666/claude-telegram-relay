@@ -3,6 +3,7 @@
  * All secrets come from .env — never hardcoded.
  */
 import "dotenv/config";
+import path from "node:path";
 
 function required(key: string): string {
   const v = process.env[key];
@@ -22,6 +23,8 @@ function csvList(key: string, fallback: string = ""): string[] {
     .filter(Boolean);
 }
 
+const relayDir = optional("RELAY_DIR", "./relay");
+
 export const config = {
   telegramToken: required("TELEGRAM_BOT_TOKEN"),
   allowedUsers: csvList("TELEGRAM_ALLOWED_USERS").map(Number),
@@ -29,18 +32,20 @@ export const config = {
   claudeBin: optional("CLAUDE_BIN", "claude"),
   allowedTools: csvList(
     "CLAUDE_ALLOWED_TOOLS",
-    "help,notes.*,files.*,web.fetch,system.*,shell.exec"
+    "help,notes.*,files.*,web.fetch,system.*,shell.exec,code.*,api.*,db.*"
   ),
   memoryTurns: Number(optional("MEMORY_TURNS", "12")),
   rateLimitMs: Number(optional("RATE_LIMIT_MS", "2000")),
   maxToolChain: Number(optional("MAX_TOOL_CHAIN", "5")),
   shellTimeout: Number(optional("SHELL_TIMEOUT_MS", "30000")),
+  codeTimeout: Number(optional("CODE_TIMEOUT_MS", "30000")),
+  claudeModel: optional("CLAUDE_MODEL", "claude-sonnet-4-5-20250929"),
   logLevel: optional("LOG_LEVEL", "info") as
     | "debug"
     | "info"
     | "warn"
     | "error",
-  featureVoice: optional("FEATURE_VOICE", "false") === "true",
-  featureImage: optional("FEATURE_IMAGE", "false") === "true",
+  relayDir,
+  uploadsDir: path.join(relayDir, "uploads"),
   adminPassphrase: process.env["ADMIN_PASSPHRASE"] || "",
 } as const;

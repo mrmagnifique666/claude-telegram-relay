@@ -2,13 +2,14 @@
  * Claude CLI integration.
  * Spawns `claude -p ... --output-format json` and captures output.
  * Passes the prompt via stdin to avoid command-line length limits (especially on Windows).
+ * Supports session resumption via --resume <sessionId>.
  */
 import os from "node:os";
 import { spawn } from "node:child_process";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { parseClaudeOutput, type ParsedResult } from "./protocol.js";
-import { getTurns } from "../storage/store.js";
+import { getTurns, getSession, saveSession } from "../storage/store.js";
 import { getToolCatalogPrompt } from "../skills/loader.js";
 
 function buildSystemPolicy(isAdmin: boolean): string {
@@ -43,8 +44,9 @@ function buildSystemPolicy(isAdmin: boolean): string {
 
 /**
  * Build the full prompt: system policy + tool catalog + conversation history + current message.
+ * Used only for new sessions (no --resume).
  */
-function buildPrompt(
+function buildFullPrompt(
   chatId: number,
   userMessage: string,
   isAdmin: boolean
@@ -79,18 +81,29 @@ function buildPrompt(
 /**
  * Run the Claude CLI with the given prompt and return parsed output.
  * Uses stdin to pass the prompt to avoid shell quoting issues.
+ * Resumes existing sessions when available for token savings.
  */
 export async function runClaude(
   chatId: number,
   userMessage: string,
   isAdmin: boolean = false
 ): Promise<ParsedResult> {
-  const prompt = buildPrompt(chatId, userMessage, isAdmin);
+  const existingSession = getSession(chatId);
+  const isResume = !!existingSession;
 
-  log.debug("Claude prompt length:", prompt.length);
+  // For resumed sessions, just send the user message.
+  // For new sessions, build the full prompt with system policy + tools + history.
+  const prompt = isResume ? userMessage : buildFullPrompt(chatId, userMessage, isAdmin);
+
+  log.debug(`Claude prompt length: ${prompt.length} (resume: ${isResume})`);
 
   return new Promise<ParsedResult>((resolve) => {
-    const args = ["-p", "-", "--output-format", "json"];
+    const args = ["-p", "-", "--output-format", "json", "--model", config.claudeModel];
+
+    if (isResume) {
+      args.push("--resume", existingSession);
+      log.debug(`Resuming session: ${existingSession}`);
+    }
 
     log.debug(`Spawning: ${config.claudeBin} ${args.join(" ")}`);
 
@@ -136,6 +149,13 @@ export async function runClaude(
       }
       const result = parseClaudeOutput(stdout);
       log.debug("Parsed Claude result type:", result.type);
+
+      // Save session_id for future resumption
+      if (result.session_id) {
+        saveSession(chatId, result.session_id);
+        log.debug(`Session saved: ${result.session_id}`);
+      }
+
       resolve(result);
     });
   });

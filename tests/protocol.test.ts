@@ -9,13 +9,13 @@ describe("parseClaudeOutput", () => {
   it("parses a valid message result", () => {
     const raw = JSON.stringify({ type: "result", result: "Hello world" });
     const result = parseClaudeOutput(raw);
-    expect(result).toEqual({ type: "message", text: "Hello world" });
+    expect(result).toMatchObject({ type: "message", text: "Hello world" });
   });
 
   it("parses the ideal protocol message format", () => {
     const raw = JSON.stringify({ type: "message", text: "Hi there" });
     const result = parseClaudeOutput(raw);
-    expect(result).toEqual({ type: "message", text: "Hi there" });
+    expect(result).toMatchObject({ type: "message", text: "Hi there" });
   });
 
   it("parses a tool_call result", () => {
@@ -25,10 +25,44 @@ describe("parseClaudeOutput", () => {
       args: { text: "buy milk" },
     });
     const result = parseClaudeOutput(raw);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       type: "tool_call",
       tool: "notes.add",
       args: { text: "buy milk" },
+    });
+  });
+
+  it("parses a tool_call nested inside a result wrapper", () => {
+    const inner = JSON.stringify({
+      type: "tool_call",
+      tool: "notes.add",
+      args: { text: "buy eggs" },
+    });
+    const raw = JSON.stringify({
+      type: "result",
+      result: inner,
+      session_id: "sess-123",
+    });
+    const result = parseClaudeOutput(raw);
+    expect(result).toMatchObject({
+      type: "tool_call",
+      tool: "notes.add",
+      args: { text: "buy eggs" },
+      session_id: "sess-123",
+    });
+  });
+
+  it("extracts session_id from result wrapper", () => {
+    const raw = JSON.stringify({
+      type: "result",
+      result: "Hello",
+      session_id: "sess-abc",
+    });
+    const result = parseClaudeOutput(raw);
+    expect(result).toMatchObject({
+      type: "message",
+      text: "Hello",
+      session_id: "sess-abc",
     });
   });
 
@@ -52,13 +86,31 @@ describe("parseClaudeOutput", () => {
       { type: "result", result: "Final answer" },
     ]);
     const result = parseClaudeOutput(raw);
-    expect(result).toEqual({ type: "message", text: "Final answer" });
+    expect(result).toMatchObject({ type: "message", text: "Final answer" });
+  });
+
+  it("parses tool_call nested in array result block", () => {
+    const inner = JSON.stringify({
+      type: "tool_call",
+      tool: "shell.exec",
+      args: { command: "ls" },
+    });
+    const raw = JSON.stringify([
+      { type: "result", result: inner, session_id: "sess-arr" },
+    ]);
+    const result = parseClaudeOutput(raw);
+    expect(result).toMatchObject({
+      type: "tool_call",
+      tool: "shell.exec",
+      args: { command: "ls" },
+      session_id: "sess-arr",
+    });
   });
 
   it("strips ANSI escape codes from plain text fallback", () => {
     const raw = "\x1b[31mRed text\x1b[0m";
     const result = parseClaudeOutput(raw);
-    expect(result).toEqual({ type: "message", text: "Red text" });
+    expect(result).toMatchObject({ type: "message", text: "Red text" });
   });
 });
 
