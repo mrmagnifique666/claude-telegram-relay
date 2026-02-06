@@ -3,7 +3,7 @@
  * Handles text messages, photos, documents, user allowlist checks, and rate limiting.
  * Sends messages with HTML parse mode and converts markdown code blocks.
  */
-import { Bot } from "grammy";
+import { Bot, InputFile } from "grammy";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config/env.js";
@@ -11,6 +11,7 @@ import { isUserAllowed, tryAdminAuth } from "../security/policy.js";
 import { consumeToken } from "../security/rateLimit.js";
 import { handleMessage, setProgressCallback } from "../orchestrator/router.js";
 import { clearTurns, clearSession } from "../storage/store.js";
+import { setBotSendFn, setBotVoiceFn } from "../skills/builtin/telegram.js";
 import { log } from "../utils/log.js";
 
 const MAX_TG_MESSAGE = 4096;
@@ -76,6 +77,16 @@ export function createBot(): Bot {
     } catch (err) {
       log.error("Failed to send progress update:", err);
     }
+  });
+
+  // Wire bot API into telegram.send skill
+  setBotSendFn(async (chatId, text) => {
+    await bot.api.sendMessage(chatId, text, { parse_mode: "Markdown" });
+  });
+
+  // Wire bot API into telegram.voice skill
+  setBotVoiceFn(async (chatId, audio, filename) => {
+    await bot.api.sendVoice(chatId, new InputFile(audio, filename));
   });
 
   // --- Commands ---

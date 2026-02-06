@@ -4,7 +4,7 @@ process.env["TELEGRAM_ALLOWED_USERS"] = "111,222";
 process.env["SANDBOX_DIR"] = "./sandbox";
 process.env["CLAUDE_BIN"] = "claude";
 process.env["CLAUDE_ALLOWED_TOOLS"] =
-  "help,notes.*,files.*,web.fetch,system.*,shell.exec,code.*,api.*,db.*";
+  "help,notes.*,files.*,web.fetch,system.*,shell.exec,code.*,api.*,db.*,telegram.*";
 process.env["MEMORY_TURNS"] = "12";
 process.env["RATE_LIMIT_MS"] = "2000";
 process.env["MAX_TOOL_CHAIN"] = "5";

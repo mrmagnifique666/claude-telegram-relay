@@ -27,7 +27,7 @@ function loadAutonomousPrompt(): string {
   return "";
 }
 
-function buildSystemPolicy(isAdmin: boolean): string {
+function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
   const lines = [
     `You are OpenClaw, an autonomous assistant operating through a Telegram relay on the user's machine.`,
     `You are proactive, capable, and concise.`,
@@ -40,11 +40,12 @@ function buildSystemPolicy(isAdmin: boolean): string {
     `- Working directory: ${process.cwd()}`,
     `- Date: ${new Date().toISOString().split("T")[0]}`,
     `- Admin: ${isAdmin ? "yes" : "no"}`,
+    ...(chatId ? [`- Telegram chat ID: ${chatId} (auto-injected for telegram.send — you can omit chatId)`] : []),
     ``,
     `## Tool use`,
     `You have access to a set of tools. To call a tool, respond with EXACTLY this JSON (no markdown fences):`,
     `{"type":"tool_call","tool":"<tool.name>","args":{...}}`,
-    `Only call tools that are listed in the tool catalog below.`,
+    `Only call tools that are listed in the tool catalog below. There is NO "self.notify" tool — to message the user, use telegram.send.`,
     `You may chain multiple tool calls in a row — after each tool result you can call another tool or respond to the user.`,
     `If you are not calling a tool, respond with plain text only.`,
     ``,
@@ -84,7 +85,7 @@ function buildFullPrompt(
   const parts: string[] = [];
 
   // System policy
-  parts.push(`[SYSTEM]\n${buildSystemPolicy(isAdmin)}`);
+  parts.push(`[SYSTEM]\n${buildSystemPolicy(isAdmin, chatId)}`);
 
   // Tool catalog
   const catalog = getToolCatalogPrompt(isAdmin);
@@ -121,9 +122,16 @@ export async function runClaude(
   const existingSession = getSession(chatId);
   const isResume = !!existingSession;
 
-  // For resumed sessions, just send the user message.
+  // For resumed sessions, prepend context + tool catalog so Claude knows exact param names.
   // For new sessions, build the full prompt with system policy + tools + history.
-  const prompt = isResume ? userMessage : buildFullPrompt(chatId, userMessage, isAdmin);
+  let prompt: string;
+  if (isResume) {
+    const catalog = getToolCatalogPrompt(isAdmin);
+    const catalogBlock = catalog ? `\n[TOOLS]\n${catalog}\n` : "";
+    prompt = `[Context: chatId=${chatId}, admin=${isAdmin}]${catalogBlock}\n${userMessage}`;
+  } else {
+    prompt = buildFullPrompt(chatId, userMessage, isAdmin);
+  }
 
   log.debug(`Claude prompt length: ${prompt.length} (resume: ${isResume})`);
 

@@ -5,6 +5,7 @@
 import { config } from "../config/env.js";
 import { getSkill } from "../skills/loader.js";
 import { log } from "../utils/log.js";
+import { saveAdminSession, isAdminSession, clearAdminSession } from "../storage/store.js";
 
 /**
  * Returns true if the Telegram user ID is in the allowlist.
@@ -34,21 +35,23 @@ export function isToolAllowed(toolName: string): boolean {
   return false;
 }
 
-/** Set of user IDs that have authenticated as admin this session. */
-const adminSessions = new Set<number>();
-
 export function isAdmin(userId: number): boolean {
-  return adminSessions.has(userId);
+  return isAdminSession(userId);
 }
 
 export function tryAdminAuth(userId: number, passphrase: string): boolean {
   if (!config.adminPassphrase) return false;
   if (passphrase === config.adminPassphrase) {
-    adminSessions.add(userId);
-    log.info(`User ${userId} authenticated as admin.`);
+    saveAdminSession(userId);
+    log.info(`User ${userId} authenticated as admin (persisted to DB).`);
     return true;
   }
   return false;
+}
+
+export function revokeAdmin(userId: number): void {
+  clearAdminSession(userId);
+  log.info(`Revoked admin for user ${userId}.`);
 }
 
 /**
@@ -58,9 +61,13 @@ export function tryAdminAuth(userId: number, passphrase: string): boolean {
 export function isToolPermitted(toolName: string, userId: number): boolean {
   if (!isToolAllowed(toolName)) return false;
   const skill = getSkill(toolName);
-  if (skill?.adminOnly && !isAdmin(userId)) {
-    log.warn(`Non-admin user ${userId} blocked from admin tool: ${toolName}`);
-    return false;
+  if (skill?.adminOnly) {
+    const adminStatus = isAdmin(userId);
+    if (!adminStatus) {
+      log.warn(`Non-admin user ${userId} blocked from admin tool: ${toolName} (isAdminSession returned false — check /admin auth and 24h expiry)`);
+      return false;
+    }
+    log.debug(`Admin user ${userId} permitted for admin tool: ${toolName}`);
   }
   return true;
 }

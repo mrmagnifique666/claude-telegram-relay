@@ -11,6 +11,7 @@ import { setLogLevel, addRedactPattern, log } from "./utils/log.js";
 import { loadBuiltinSkills } from "./skills/loader.js";
 import { processCodeRequests } from "./processors/codequeue.js";
 import { createBot } from "./bot/telegram.js";
+import { startVoiceServer } from "./voice/server.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -113,6 +114,9 @@ async function main() {
 
   // Load skills
   await loadBuiltinSkills();
+
+  // Start voice server (before bot.start() which blocks)
+  startVoiceServer();
 
   // Create and start Telegram bot (long polling)
   const bot = createBot();

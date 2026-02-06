@@ -7,6 +7,7 @@ import {
   isToolPermitted,
   isAdmin,
   tryAdminAuth,
+  revokeAdmin,
 } from "../src/security/policy.js";
 
 // Skills must be loaded so getSkill() can find them
@@ -22,6 +23,12 @@ const REGULAR_USER = 111;
 const OTHER_USER = 333;
 
 describe("isToolPermitted (combined allowlist + admin)", () => {
+  beforeEach(() => {
+    // Clear admin sessions to avoid leaking state between tests/runs
+    revokeAdmin(REGULAR_USER);
+    revokeAdmin(OTHER_USER);
+  });
+
   it("allows non-admin tools for regular users", () => {
     expect(isToolPermitted("help", REGULAR_USER)).toBe(true);
     expect(isToolPermitted("notes.add", REGULAR_USER)).toBe(true);

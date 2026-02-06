@@ -32,7 +32,7 @@ export const config = {
   claudeBin: optional("CLAUDE_BIN", "claude"),
   allowedTools: csvList(
     "CLAUDE_ALLOWED_TOOLS",
-    "help,notes.*,files.*,web.fetch,system.*,shell.exec,code.*,api.*,db.*"
+    "help,notes.*,files.*,web.fetch,system.*,shell.exec,code.*,api.*,db.*,telegram.*"
   ),
   memoryTurns: Number(optional("MEMORY_TURNS", "12")),
   rateLimitMs: Number(optional("RATE_LIMIT_MS", "2000")),
@@ -48,4 +48,17 @@ export const config = {
   relayDir,
   uploadsDir: path.join(relayDir, "uploads"),
   adminPassphrase: process.env["ADMIN_PASSPHRASE"] || "",
+  elevenlabsApiKey: optional("ELEVENLABS_API_KEY", ""),
+  elevenlabsVoiceId: optional("ELEVENLABS_VOICE_ID", "onwK4e9ZLuTAKqWW03F9"),
+
+  // Voice (Twilio phone calls)
+  voiceEnabled: optional("VOICE_ENABLED", "false") === "true",
+  voicePort: Number(optional("VOICE_PORT", "3100")),
+  voicePublicUrl: optional("VOICE_PUBLIC_URL", ""),
+  twilioAccountSid: optional("TWILIO_ACCOUNT_SID", ""),
+  twilioAuthToken: optional("TWILIO_AUTH_TOKEN", ""),
+  deepgramApiKey: optional("DEEPGRAM_API_KEY", ""),
+  voiceChatId: Number(optional("VOICE_CHAT_ID", "0")),
+  voiceUserId: Number(optional("VOICE_USER_ID", "0")),
+  voiceLanguage: optional("VOICE_LANGUAGE", "fr"),
 } as const;

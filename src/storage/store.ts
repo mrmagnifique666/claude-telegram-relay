@@ -40,6 +40,11 @@ export function getDb(): Database.Database {
         session_id TEXT NOT NULL,
         updated_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
+
+      CREATE TABLE IF NOT EXISTS admin_sessions (
+        user_id INTEGER PRIMARY KEY,
+        authenticated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
     `);
     log.info(`SQLite store initialised at ${dbPath}`);
   }
@@ -106,4 +111,42 @@ export function clearSession(chatId: number): void {
   const d = getDb();
   d.prepare("DELETE FROM sessions WHERE chat_id = ?").run(chatId);
   log.debug(`Cleared session for chat ${chatId}`);
+}
+
+// --- Admin sessions (persistent across restarts) ---
+
+const ADMIN_EXPIRY_SECONDS = 24 * 60 * 60; // 24 hours
+
+export function saveAdminSession(userId: number): void {
+  const d = getDb();
+  d.prepare(
+    `INSERT INTO admin_sessions (user_id, authenticated_at) VALUES (?, unixepoch())
+     ON CONFLICT(user_id) DO UPDATE SET authenticated_at = unixepoch()`
+  ).run(userId);
+}
+
+export function isAdminSession(userId: number): boolean {
+  const d = getDb();
+  const row = d
+    .prepare(
+      "SELECT authenticated_at FROM admin_sessions WHERE user_id = ? AND (unixepoch() - authenticated_at) < ?",
+    )
+    .get(userId, ADMIN_EXPIRY_SECONDS) as { authenticated_at: number } | undefined;
+  if (!row) {
+    // Check if there's an expired session for diagnostics
+    const expired = d
+      .prepare("SELECT authenticated_at FROM admin_sessions WHERE user_id = ?")
+      .get(userId) as { authenticated_at: number } | undefined;
+    if (expired) {
+      log.debug(`Admin session for user ${userId} expired (age: ${Math.round((Date.now() / 1000 - expired.authenticated_at) / 3600)}h)`);
+    } else {
+      log.debug(`No admin session found for user ${userId}`);
+    }
+  }
+  return !!row;
+}
+
+export function clearAdminSession(userId: number): void {
+  const d = getDb();
+  d.prepare("DELETE FROM admin_sessions WHERE user_id = ?").run(userId);
 }

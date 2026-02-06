@@ -12,13 +12,15 @@
     "test:node": "node --experimental-vm-modules node_modules/.bin/vitest run"
   },
   "dependencies": {
-    "grammy": "^1.30.0",
+    "better-sqlite3": "^11.7.0",
     "dotenv": "^16.4.7",
-    "better-sqlite3": "^11.7.0"
+    "grammy": "^1.30.0",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/bun": "^1.1.14",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

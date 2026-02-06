@@ -112,6 +112,55 @@ describe("parseClaudeOutput", () => {
     const result = parseClaudeOutput(raw);
     expect(result).toMatchObject({ type: "message", text: "Red text" });
   });
+
+  it("extracts tool_call from mixed text inside result wrapper", () => {
+    const inner = `Let me fetch that for you.\n\n{"type":"tool_call","tool":"web.fetch","args":{"url":"https://example.com"}}`;
+    const raw = JSON.stringify({
+      type: "result",
+      result: inner,
+      session_id: "sess-mixed",
+    });
+    const result = parseClaudeOutput(raw);
+    expect(result).toMatchObject({
+      type: "tool_call",
+      tool: "web.fetch",
+      args: { url: "https://example.com" },
+      session_id: "sess-mixed",
+    });
+  });
+
+  it("extracts tool_call from text with markdown code fences", () => {
+    const inner = 'I\'ll read that file.\n\n```json\n{"type":"tool_call","tool":"files.read","args":{"path":"src/index.ts"}}\n```';
+    const raw = JSON.stringify({ type: "result", result: inner });
+    const result = parseClaudeOutput(raw);
+    expect(result).toMatchObject({
+      type: "tool_call",
+      tool: "files.read",
+      args: { path: "src/index.ts" },
+    });
+  });
+
+  it("extracts tool_call from plain text (no result wrapper)", () => {
+    const raw = 'Sure, let me help.\n\n{"type":"tool_call","tool":"notes.add","args":{"text":"hello"}}';
+    const result = parseClaudeOutput(raw);
+    expect(result).toMatchObject({
+      type: "tool_call",
+      tool: "notes.add",
+      args: { text: "hello" },
+    });
+  });
+
+  it("returns plain message when no tool_call is embedded", () => {
+    const raw = JSON.stringify({
+      type: "result",
+      result: "Here is the answer with no tools needed.",
+    });
+    const result = parseClaudeOutput(raw);
+    expect(result).toMatchObject({
+      type: "message",
+      text: "Here is the answer with no tools needed.",
+    });
+  });
 });
 
 describe("isToolAllowed", () => {

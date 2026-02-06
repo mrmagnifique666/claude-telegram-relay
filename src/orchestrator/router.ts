@@ -53,41 +53,92 @@ export async function handleMessage(
 
     const { tool, args } = result;
 
-    // Security: check allowlist + admin
+    // Normalize common arg aliases (snake_case → camelCase)
+    if (args.chat_id !== undefined && args.chatId === undefined) {
+      args.chatId = args.chat_id;
+      delete args.chat_id;
+    }
+    if (args.message !== undefined && args.text === undefined) {
+      args.text = args.message;
+      delete args.message;
+    }
+
+    // Auto-inject chatId for telegram.* skills when missing
+    if (tool.startsWith("telegram.") && !args.chatId) {
+      args.chatId = String(chatId);
+      log.debug(`[router] Auto-injected chatId=${chatId} for ${tool}`);
+    }
+
+    // Security: check allowlist + admin — hard block, no retry
     if (!isToolPermitted(tool, userId)) {
       const msg = tool
         ? `Tool "${tool}" is not permitted${getSkill(tool)?.adminOnly ? " (admin only)" : ""}.`
         : "Tool not permitted.";
+      if (progressCallback) {
+        await progressCallback(chatId, `❌ ${msg}`);
+      }
       addTurn(chatId, { role: "assistant", content: msg });
       return msg;
     }
 
-    // Look up skill
+    // Look up skill — feed error back to Claude so it can retry
     const skill = getSkill(tool);
     if (!skill) {
-      const msg = `Unknown tool: "${tool}".`;
-      addTurn(chatId, { role: "assistant", content: msg });
-      return msg;
+      const errorMsg = `Error: Unknown tool "${tool}". Check the tool catalog and try again.`;
+      log.warn(`[router] ${errorMsg}`);
+      if (progressCallback) {
+        await progressCallback(chatId, `❌ Unknown tool: ${tool}`);
+      }
+      const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
+      addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
+      addTurn(chatId, { role: "user", content: followUp });
+      result = await runClaude(chatId, followUp, userIsAdmin);
+      if (result.type === "message") {
+        addTurn(chatId, { role: "assistant", content: result.text });
+        return result.text;
+      }
+      continue;
     }
 
-    // Validate args
+    // Validate args — feed error back to Claude so it can fix & retry
     const validationError = validateArgs(args, skill.argsSchema);
     if (validationError) {
-      const msg = `Tool "${tool}" argument error: ${validationError}`;
-      addTurn(chatId, { role: "assistant", content: msg });
-      return msg;
+      const errorMsg = `Tool "${tool}" argument error: ${validationError}. Fix the arguments and try again.`;
+      log.warn(`[router] ${errorMsg}`);
+      if (progressCallback) {
+        await progressCallback(chatId, `❌ Arg error on ${tool}`);
+      }
+      const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
+      addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
+      addTurn(chatId, { role: "user", content: followUp });
+      result = await runClaude(chatId, followUp, userIsAdmin);
+      if (result.type === "message") {
+        addTurn(chatId, { role: "assistant", content: result.text });
+        return result.text;
+      }
+      continue;
     }
 
-    // Execute skill
+    // Execute skill — feed errors back to Claude so it can adapt
     log.info(`Executing tool (step ${step + 1}/${config.maxToolChain}): ${tool}`);
     let toolResult: string;
     try {
       toolResult = await skill.execute(args);
     } catch (err) {
-      const msg = `Tool "${tool}" failed: ${err instanceof Error ? err.message : String(err)}`;
-      log.error(msg);
-      addTurn(chatId, { role: "assistant", content: msg });
-      return msg;
+      const errorMsg = `Tool "${tool}" execution failed: ${err instanceof Error ? err.message : String(err)}`;
+      log.error(errorMsg);
+      if (progressCallback) {
+        await progressCallback(chatId, `❌ ${tool} failed`);
+      }
+      const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
+      addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
+      addTurn(chatId, { role: "user", content: followUp });
+      result = await runClaude(chatId, followUp, userIsAdmin);
+      if (result.type === "message") {
+        addTurn(chatId, { role: "assistant", content: result.text });
+        return result.text;
+      }
+      continue;
     }
 
     log.debug(`Tool result (${tool}):`, toolResult.slice(0, 200));
@@ -120,6 +171,9 @@ export async function handleMessage(
   // If we exhausted the chain limit and still got a tool_call
   if (result.type === "tool_call") {
     const msg = `Reached tool chain limit (${config.maxToolChain} steps). Last pending tool: ${result.tool}.`;
+    if (progressCallback) {
+      await progressCallback(chatId, `⚠️ Chain limit reached (${config.maxToolChain} steps)`);
+    }
     addTurn(chatId, { role: "assistant", content: msg });
     return msg;
   }
