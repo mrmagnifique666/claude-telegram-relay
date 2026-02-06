@@ -13,6 +13,7 @@ import { processCodeRequests } from "./processors/codequeue.js";
 import { createBot } from "./bot/telegram.js";
 import { startVoiceServer } from "./voice/server.js";
 import { startScheduler, stopScheduler } from "./scheduler/scheduler.js";
+import { cleanupDatabase } from "./storage/store.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -120,6 +121,9 @@ async function main() {
 
   // Watch .env for hot-reload
   watchEnv();
+
+  // Cleanup stale database entries on startup
+  cleanupDatabase();
 
   // Start voice server (before bot.start() which blocks)
   startVoiceServer();

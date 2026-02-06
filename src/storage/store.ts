@@ -194,3 +194,22 @@ export function resolveError(id: number): boolean {
   const info = d.prepare("UPDATE error_log SET resolved = 1 WHERE id = ?").run(id);
   return info.changes > 0;
 }
+
+/**
+ * Delete old errors and expired admin sessions.
+ * Called on startup and periodically by the scheduler.
+ */
+export function cleanupDatabase(errorMaxAgeDays = 30): { errors: number; sessions: number } {
+  const d = getDb();
+  const errorResult = d
+    .prepare("DELETE FROM error_log WHERE resolved = 1 AND (unixepoch() - timestamp) > ?")
+    .run(errorMaxAgeDays * 86400);
+  const sessionResult = d
+    .prepare("DELETE FROM admin_sessions WHERE (unixepoch() - authenticated_at) >= ?")
+    .run(ADMIN_EXPIRY_SECONDS);
+  const removed = { errors: errorResult.changes, sessions: sessionResult.changes };
+  if (removed.errors > 0 || removed.sessions > 0) {
+    log.info(`[cleanup] Removed ${removed.errors} old error(s), ${removed.sessions} expired session(s)`);
+  }
+  return removed;
+}

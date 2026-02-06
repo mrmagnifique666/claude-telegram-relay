@@ -10,7 +10,7 @@ import { config } from "../config/env.js";
 import { isUserAllowed, tryAdminAuth } from "../security/policy.js";
 import { consumeToken } from "../security/rateLimit.js";
 import { handleMessage, setProgressCallback } from "../orchestrator/router.js";
-import { clearTurns, clearSession } from "../storage/store.js";
+import { clearTurns, clearSession, logError } from "../storage/store.js";
 import { setBotSendFn, setBotVoiceFn, setBotPhotoFn } from "../skills/builtin/telegram.js";
 import { log } from "../utils/log.js";
 
@@ -189,6 +189,7 @@ export function createBot(): Bot {
       await sendLong(ctx, response);
     } catch (err) {
       log.error("Error handling message:", err);
+      logError(err instanceof Error ? err : String(err), "telegram:text_handler");
       await ctx.reply("Sorry, something went wrong processing your message.");
     }
   });
@@ -225,6 +226,7 @@ export function createBot(): Bot {
       await sendLong(ctx, response);
     } catch (err) {
       log.error("Error handling photo:", err);
+      logError(err instanceof Error ? err : String(err), "telegram:photo_handler");
       await ctx.reply("Sorry, something went wrong processing your photo.");
     } finally {
       if (localPath && fs.existsSync(localPath)) {
@@ -264,6 +266,7 @@ export function createBot(): Bot {
       await sendLong(ctx, response);
     } catch (err) {
       log.error("Error handling document:", err);
+      logError(err instanceof Error ? err : String(err), "telegram:document_handler");
       await ctx.reply("Sorry, something went wrong processing your file.");
     } finally {
       if (localPath && fs.existsSync(localPath)) {
@@ -277,6 +280,10 @@ export function createBot(): Bot {
   bot.on("message:voice", async (ctx) => {
     const userId = ctx.from?.id;
     if (!userId || !isUserAllowed(userId)) return;
+    if (!consumeToken(userId)) {
+      await ctx.reply("Slow down! Please wait a moment before sending another message.");
+      return;
+    }
     await ctx.reply(
       "Voice message received. Transcription is not yet implemented — please send text instead."
     );
@@ -308,8 +315,8 @@ async function sendLong(
   if (html.length <= MAX_TG_MESSAGE) {
     try {
       await ctx.reply(html, { parse_mode: "HTML" });
-    } catch {
-      // Fallback to plain text if HTML parsing fails
+    } catch (err) {
+      log.warn(`[sendLong] HTML parse failed, falling back to plain text: ${err}`);
       await ctx.reply(text);
     }
     return;
@@ -330,7 +337,8 @@ async function sendLong(
     }
     try {
       await ctx.reply(chunk, { parse_mode: "HTML" });
-    } catch {
+    } catch (err) {
+      log.warn(`[sendLong] HTML chunk parse failed, falling back: ${err}`);
       await ctx.reply(chunk);
     }
   }

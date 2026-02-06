@@ -53,19 +53,35 @@ export async function handleMessage(
 
     const { tool, args } = result;
 
-    // Normalize common arg aliases (snake_case → camelCase)
-    if (args.chat_id !== undefined && args.chatId === undefined) {
-      args.chatId = args.chat_id;
-      delete args.chat_id;
+    // Guard against malformed tool calls
+    if (!tool || typeof tool !== "string") {
+      const errorMsg = "Tool call missing or invalid tool name.";
+      log.warn(`[router] ${errorMsg}`);
+      logError(errorMsg, "router:malformed_tool");
+      addTurn(chatId, { role: "assistant", content: errorMsg });
+      return errorMsg;
     }
-    if (args.message !== undefined && args.text === undefined) {
-      args.text = args.message;
-      delete args.message;
+    if (!args || typeof args !== "object") {
+      log.debug(`[router] Tool "${tool}" called with missing args — defaulting to {}`);
+      result.args = {};
+    }
+    const safeArgs = result.args as Record<string, unknown>;
+
+    // Normalize common arg aliases (snake_case → camelCase)
+    if (safeArgs.chat_id !== undefined && safeArgs.chatId === undefined) {
+      safeArgs.chatId = safeArgs.chat_id;
+      delete safeArgs.chat_id;
+      log.debug(`[router] Normalized chat_id → chatId for ${tool}`);
+    }
+    if (safeArgs.message !== undefined && safeArgs.text === undefined) {
+      safeArgs.text = safeArgs.message;
+      delete safeArgs.message;
+      log.debug(`[router] Normalized message → text for ${tool}`);
     }
 
     // Auto-inject chatId for telegram.* skills when missing
-    if (tool.startsWith("telegram.") && !args.chatId) {
-      args.chatId = String(chatId);
+    if (tool.startsWith("telegram.") && !safeArgs.chatId) {
+      safeArgs.chatId = String(chatId);
       log.debug(`[router] Auto-injected chatId=${chatId} for ${tool}`);
     }
 
@@ -102,7 +118,7 @@ export async function handleMessage(
     }
 
     // Validate args — feed error back to Claude so it can fix & retry
-    const validationError = validateArgs(args, skill.argsSchema);
+    const validationError = validateArgs(safeArgs, skill.argsSchema);
     if (validationError) {
       const errorMsg = `Tool "${tool}" argument error: ${validationError}. Fix the arguments and try again.`;
       log.warn(`[router] ${errorMsg}`);
@@ -125,7 +141,7 @@ export async function handleMessage(
     log.info(`Executing tool (step ${step + 1}/${config.maxToolChain}): ${tool}`);
     let toolResult: string;
     try {
-      toolResult = await skill.execute(args);
+      toolResult = await skill.execute(safeArgs);
     } catch (err) {
       const errorMsg = `Tool "${tool}" execution failed: ${err instanceof Error ? err.message : String(err)}`;
       log.error(errorMsg);

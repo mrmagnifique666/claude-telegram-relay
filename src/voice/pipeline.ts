@@ -7,6 +7,7 @@ import { textToSpeechUlaw } from "./elevenlabs.js";
 import { handleMessage } from "../orchestrator/router.js";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
+import { logError } from "../storage/store.js";
 
 const CHUNK_SIZE = 640; // 640 bytes = 80ms of mulaw 8kHz
 
@@ -64,6 +65,7 @@ export function handleTwilioStream(twilioWs: WebSocket): void {
       }
     } catch (err) {
       log.error(`[pipeline] Error processing utterance: ${err}`);
+      logError(err instanceof Error ? err : String(err), "voice:pipeline:utterance");
     } finally {
       isProcessing = false;
 
@@ -80,7 +82,8 @@ export function handleTwilioStream(twilioWs: WebSocket): void {
     let msg: any;
     try {
       msg = JSON.parse(data.toString());
-    } catch {
+    } catch (err) {
+      log.warn(`[pipeline] Failed to parse Twilio message: ${err}`);
       return;
     }
 
@@ -110,7 +113,12 @@ export function handleTwilioStream(twilioWs: WebSocket): void {
               utteranceBuffer += (utteranceBuffer ? " " : "") + text;
             }
           },
-          onError: (err) => log.error(`[pipeline] Deepgram error: ${err}`),
+          onError: (err) => {
+            log.error(`[pipeline] Deepgram error: ${err}`);
+            logError(err instanceof Error ? err : String(err), "voice:deepgram");
+            isProcessing = false;
+            pendingUtterance = null;
+          },
           onClose: () => log.info("[pipeline] Deepgram closed"),
         });
         break;
