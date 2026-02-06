@@ -28,7 +28,7 @@ async function generateImage(prompt: string): Promise<{ filePath: string; textRe
     throw new Error("GEMINI_API_KEY not configured");
   }
 
-  const model = "gemini-2.0-flash-exp-image-generation";
+  const model = "gemini-2.5-flash-image";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.geminiApiKey}`;
 
   const controller = new AbortController();
@@ -40,7 +40,9 @@ async function generateImage(prompt: string): Promise<{ filePath: string; textRe
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
-        responseModalities: ["TEXT", "IMAGE"],
+        temperature: 1.0,
+        topP: 0.95,
+        topK: 64,
       },
     }),
     signal: controller.signal,
@@ -64,7 +66,7 @@ async function generateImage(prompt: string): Promise<{ filePath: string; textRe
     throw new Error("Gemini returned no content");
   }
 
-  // Find image and text parts
+  // Find image part (inlineData with base64)
   const imagePart = parts.find((p) => p.inlineData?.data);
   const textPart = parts.find((p) => p.text);
 
