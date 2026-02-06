@@ -5,12 +5,27 @@
  * Supports session resumption via --resume <sessionId>.
  */
 import os from "node:os";
+import fs from "node:fs";
+import path from "node:path";
 import { spawn } from "node:child_process";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { parseClaudeOutput, type ParsedResult } from "./protocol.js";
 import { getTurns, getSession, saveSession } from "../storage/store.js";
 import { getToolCatalogPrompt } from "../skills/loader.js";
+
+const CLI_TIMEOUT_MS = 120_000; // 2 minutes max per Claude CLI call
+
+/** Load AUTONOMOUS.md if it exists */
+function loadAutonomousPrompt(): string {
+  try {
+    const p = path.resolve(process.cwd(), "AUTONOMOUS.md");
+    if (fs.existsSync(p)) {
+      return fs.readFileSync(p, "utf-8");
+    }
+  } catch { /* ignore */ }
+  return "";
+}
 
 function buildSystemPolicy(isAdmin: boolean): string {
   const lines = [
@@ -38,7 +53,22 @@ function buildSystemPolicy(isAdmin: boolean): string {
     `- When a task requires multiple steps, chain tool calls to complete it autonomously.`,
     `- If a tool call fails, try an alternative approach before giving up.`,
     `- Format responses for Telegram: use short paragraphs, bullet points, and code blocks where helpful.`,
+    ``,
+    `## Self-modification (admin only)`,
+    `- Your source code is at: ${process.cwd()}`,
+    `- You can read your own code with files.read_anywhere`,
+    `- You can modify your own code with files.write_anywhere`,
+    `- You can run shell commands with shell.exec`,
+    `- You can execute code with code.run`,
+    `- After modifying code, the bot must be restarted to apply changes.`,
   ];
+
+  // Append AUTONOMOUS.md content if it exists
+  const autonomousPrompt = loadAutonomousPrompt();
+  if (autonomousPrompt) {
+    lines.push("", autonomousPrompt);
+  }
+
   return lines.join("\n");
 }
 
@@ -115,6 +145,14 @@ export async function runClaude(
 
     let stdout = "";
     let stderr = "";
+    let killed = false;
+
+    // Timeout: kill the process if it takes too long
+    const timer = setTimeout(() => {
+      killed = true;
+      proc.kill("SIGTERM");
+      log.warn(`Claude CLI timed out after ${CLI_TIMEOUT_MS}ms`);
+    }, CLI_TIMEOUT_MS);
 
     proc.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -129,6 +167,7 @@ export async function runClaude(
     proc.stdin.end();
 
     proc.on("error", (err) => {
+      clearTimeout(timer);
       log.error("Failed to spawn Claude CLI:", err.message);
       resolve({
         type: "message",
@@ -137,18 +176,34 @@ export async function runClaude(
     });
 
     proc.on("close", (code) => {
+      clearTimeout(timer);
+
+      if (killed) {
+        resolve({
+          type: "message",
+          text: "(Claude CLI timed out — response took too long)",
+        });
+        return;
+      }
+
       if (code !== 0) {
-        log.warn(`Claude CLI exited with code ${code}. stderr: ${stderr}`);
+        log.warn(`Claude CLI exited with code ${code}. stderr: ${stderr.slice(0, 500)}`);
       }
       if (!stdout.trim()) {
+        log.warn("Claude CLI returned empty stdout. stderr:", stderr.slice(0, 500));
         resolve({
           type: "message",
           text: stderr.trim() || "(Claude returned an empty response)",
         });
         return;
       }
+
+      log.debug(`Claude raw output (first 300 chars): ${stdout.slice(0, 300)}`);
       const result = parseClaudeOutput(stdout);
       log.debug("Parsed Claude result type:", result.type);
+      if (result.type === "tool_call") {
+        log.debug(`Parsed tool_call: ${result.tool}(${JSON.stringify(result.args).slice(0, 200)})`);
+      }
 
       // Save session_id for future resumption
       if (result.session_id) {

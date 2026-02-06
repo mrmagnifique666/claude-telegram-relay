@@ -38,7 +38,9 @@ export async function handleMessage(
   addTurn(chatId, { role: "user", content: userMessage });
 
   // First pass: Claude
+  log.info(`[router] Sending to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
   let result = await runClaude(chatId, userMessage, userIsAdmin);
+  log.info(`[router] Claude responded with type: ${result.type}`);
 
   if (result.type === "message") {
     addTurn(chatId, { role: "assistant", content: result.text });
@@ -101,7 +103,9 @@ export async function handleMessage(
     addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
     addTurn(chatId, { role: "user", content: followUp });
 
+    log.info(`[router] Feeding tool result back to Claude (step ${step + 1})...`);
     result = await runClaude(chatId, followUp, userIsAdmin);
+    log.info(`[router] Claude follow-up response type: ${result.type}`);
 
     // If Claude responds with a message, we're done
     if (result.type === "message") {
@@ -110,6 +114,7 @@ export async function handleMessage(
     }
 
     // Otherwise loop continues with next tool call
+    log.info(`[router] Continuing chain — next tool: ${result.type === "tool_call" ? result.tool : "unknown"}`);
   }
 
   // If we exhausted the chain limit and still got a tool_call
