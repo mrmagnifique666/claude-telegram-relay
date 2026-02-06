@@ -1,8 +1,9 @@
 /**
- * Built-in skill: system info, process management, and open.
+ * Built-in skill: system info, process management, restart, and open.
  * system.info — system information (any user)
  * system.processes — list running processes (any user)
  * system.kill — kill a process by PID (admin only)
+ * system.restart — restart the bot (admin only, requires wrapper)
  * system.open — open a file/URL with the default app (admin only)
  */
 import os from "node:os";
@@ -98,6 +99,24 @@ registerSkill({
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
+  },
+});
+
+registerSkill({
+  name: "system.restart",
+  description: "Restart the bot process (admin only). Requires the wrapper to be running.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      reason: { type: "string", description: "Reason for restart (logged)" },
+    },
+  },
+  async execute(args): Promise<string> {
+    const reason = (args.reason as string) || "no reason given";
+    // Exit code 42 signals the wrapper to restart
+    setTimeout(() => process.exit(42), 500);
+    return `Restarting Kingston... (reason: ${reason})`;
   },
 });
 

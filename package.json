@@ -8,6 +8,7 @@
     "start": "bun run src/index.ts",
     "dev:node": "tsx --watch src/index.ts",
     "start:node": "tsx src/index.ts",
+    "start:wrapper": "tsx src/wrapper.ts",
     "test": "bun test",
     "test:node": "node --experimental-vm-modules node_modules/.bin/vitest run"
   },
