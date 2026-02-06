@@ -9,6 +9,9 @@
 import os from "node:os";
 import { spawn } from "node:child_process";
 import { registerSkill } from "../loader.js";
+import { clearSession, clearTurns } from "../../storage/store.js";
+import { config } from "../../config/env.js";
+import { log } from "../../utils/log.js";
 
 registerSkill({
   name: "system.info",
@@ -114,9 +117,14 @@ registerSkill({
   },
   async execute(args): Promise<string> {
     const reason = (args.reason as string) || "no reason given";
-    // Exit code 42 signals the wrapper to restart
-    setTimeout(() => process.exit(42), 500);
-    return `Restarting Kingston... (reason: ${reason})`;
+    log.info(`[system.restart] Restart requested: ${reason}`);
+    // Clear all sessions so stale messages don't re-trigger after restart
+    for (const uid of config.allowedUsers) {
+      clearSession(uid);
+      clearTurns(uid);
+    }
+    // Exit immediately — wrapper will catch code 42 and restart
+    process.exit(42);
   },
 });
 

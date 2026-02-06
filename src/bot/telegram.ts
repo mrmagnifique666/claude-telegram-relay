@@ -69,6 +69,17 @@ async function downloadTelegramFile(
 
 export function createBot(): Bot {
   const bot = new Bot(config.telegramToken);
+  const bootTime = Math.floor(Date.now() / 1000);
+
+  // Drop messages sent before this boot (prevents re-delivery after restart)
+  bot.use(async (ctx, next) => {
+    const msgDate = ctx.message?.date ?? ctx.editedMessage?.date ?? 0;
+    if (msgDate > 0 && msgDate < bootTime) {
+      log.debug(`Dropping stale message (date=${msgDate}, boot=${bootTime})`);
+      return;
+    }
+    await next();
+  });
 
   // Setup progress callback for heartbeat messages
   setProgressCallback(async (chatId, message) => {
