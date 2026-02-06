@@ -28,7 +28,7 @@ async function generateImage(prompt: string): Promise<{ filePath: string; textRe
     throw new Error("GEMINI_API_KEY not configured");
   }
 
-  const model = "gemini-2.0-flash-exp";
+  const model = "gemini-2.0-flash-exp-image-generation";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.geminiApiKey}`;
 
   const controller = new AbortController();
