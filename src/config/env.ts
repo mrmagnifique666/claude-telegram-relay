@@ -70,6 +70,9 @@ function buildConfig() {
 
     // Gemini (image generation)
     geminiApiKey: optional("GEMINI_API_KEY", ""),
+
+    // Brave Search
+    braveSearchApiKey: optional("BRAVE_SEARCH_API_KEY", ""),
   };
 }
 
