@@ -12,6 +12,15 @@ import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 
 /**
+ * Callback to send intermediate progress updates to the user.
+ */
+export let progressCallback: ((chatId: number, message: string) => Promise<void>) | null = null;
+
+export function setProgressCallback(cb: (chatId: number, message: string) => Promise<void>) {
+  progressCallback = cb;
+}
+
+/**
  * Handle a user message end-to-end:
  * 1. Send to Claude
  * 2. If Claude returns a tool call, validate & execute it
@@ -80,6 +89,12 @@ export async function handleMessage(
     }
 
     log.debug(`Tool result (${tool}):`, toolResult.slice(0, 200));
+
+    // Heartbeat: send intermediate progress to Telegram
+    if (progressCallback) {
+      const preview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
+      await progressCallback(chatId, `⚙️ **${tool}**\n\`\`\`\n${preview}\n\`\`\``);
+    }
 
     // Feed tool result back to Claude for next step or final answer
     const followUp = `[Tool "${tool}" returned]:\n${toolResult}`;

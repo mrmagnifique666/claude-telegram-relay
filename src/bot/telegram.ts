@@ -9,7 +9,7 @@ import path from "node:path";
 import { config } from "../config/env.js";
 import { isUserAllowed, tryAdminAuth } from "../security/policy.js";
 import { consumeToken } from "../security/rateLimit.js";
-import { handleMessage } from "../orchestrator/router.js";
+import { handleMessage, setProgressCallback } from "../orchestrator/router.js";
 import { clearTurns, clearSession } from "../storage/store.js";
 import { log } from "../utils/log.js";
 
@@ -68,6 +68,15 @@ async function downloadTelegramFile(
 
 export function createBot(): Bot {
   const bot = new Bot(config.telegramToken);
+
+  // Setup progress callback for heartbeat messages
+  setProgressCallback(async (chatId, message) => {
+    try {
+      await bot.api.sendMessage(chatId, message, { parse_mode: "Markdown" });
+    } catch (err) {
+      log.error("Failed to send progress update:", err);
+    }
+  });
 
   // --- Commands ---
 

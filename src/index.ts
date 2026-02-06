@@ -9,6 +9,7 @@
 import { config } from "./config/env.js";
 import { setLogLevel, addRedactPattern, log } from "./utils/log.js";
 import { loadBuiltinSkills } from "./skills/loader.js";
+import { processCodeRequests } from "./processors/codequeue.js";
 import { createBot } from "./bot/telegram.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -106,6 +107,9 @@ async function main() {
     releaseLock();
     process.exit(0);
   });
+
+  // Process any pending code requests from Kingston
+  await processCodeRequests();
 
   // Load skills
   await loadBuiltinSkills();
