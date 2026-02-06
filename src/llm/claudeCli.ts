@@ -14,7 +14,7 @@ import { parseClaudeOutput, type ParsedResult } from "./protocol.js";
 import { getTurns, getSession, saveSession } from "../storage/store.js";
 import { getToolCatalogPrompt } from "../skills/loader.js";
 
-const CLI_TIMEOUT_MS = 120_000; // 2 minutes max per Claude CLI call
+const CLI_TIMEOUT_MS = config.cliTimeoutMs;
 
 /** Load AUTONOMOUS.md if it exists */
 function loadAutonomousPrompt(): string {

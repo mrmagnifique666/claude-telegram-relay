@@ -45,6 +45,7 @@ function buildConfig() {
     maxToolChain: Number(optional("MAX_TOOL_CHAIN", "5")),
     shellTimeout: Number(optional("SHELL_TIMEOUT_MS", "30000")),
     codeTimeout: Number(optional("CODE_TIMEOUT_MS", "30000")),
+    cliTimeoutMs: Number(optional("CLI_TIMEOUT_MS", "180000")),
     claudeModel: optional("CLAUDE_MODEL", "claude-sonnet-4-5-20250929"),
     logLevel: optional("LOG_LEVEL", "info") as "debug" | "info" | "warn" | "error",
     relayDir,
