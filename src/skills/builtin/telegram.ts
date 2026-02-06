@@ -8,9 +8,11 @@ import { log } from "../../utils/log.js";
 
 type SendFn = (chatId: number, text: string) => Promise<void>;
 type VoiceFn = (chatId: number, audio: Buffer, filename: string) => Promise<void>;
+type PhotoFn = (chatId: number, photo: string | Buffer, caption?: string) => Promise<void>;
 
 let botSend: SendFn | null = null;
 let botVoice: VoiceFn | null = null;
+let botPhoto: PhotoFn | null = null;
 
 /** Called from telegram.ts after the Bot is created */
 export function setBotSendFn(fn: SendFn): void {
@@ -20,6 +22,15 @@ export function setBotSendFn(fn: SendFn): void {
 /** Called from telegram.ts after the Bot is created */
 export function setBotVoiceFn(fn: VoiceFn): void {
   botVoice = fn;
+}
+
+/** Called from telegram.ts after the Bot is created */
+export function setBotPhotoFn(fn: PhotoFn): void {
+  botPhoto = fn;
+}
+
+export function getBotPhotoFn(): PhotoFn | null {
+  return botPhoto;
 }
 
 registerSkill({

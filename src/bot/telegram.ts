@@ -11,7 +11,7 @@ import { isUserAllowed, tryAdminAuth } from "../security/policy.js";
 import { consumeToken } from "../security/rateLimit.js";
 import { handleMessage, setProgressCallback } from "../orchestrator/router.js";
 import { clearTurns, clearSession } from "../storage/store.js";
-import { setBotSendFn, setBotVoiceFn } from "../skills/builtin/telegram.js";
+import { setBotSendFn, setBotVoiceFn, setBotPhotoFn } from "../skills/builtin/telegram.js";
 import { log } from "../utils/log.js";
 
 const MAX_TG_MESSAGE = 4096;
@@ -87,6 +87,12 @@ export function createBot(): Bot {
   // Wire bot API into telegram.voice skill
   setBotVoiceFn(async (chatId, audio, filename) => {
     await bot.api.sendVoice(chatId, new InputFile(audio, filename));
+  });
+
+  // Wire bot API into telegram.photo / image.generate skill
+  setBotPhotoFn(async (chatId, photo, caption) => {
+    const source = typeof photo === "string" ? new InputFile(photo) : new InputFile(photo, "image.png");
+    await bot.api.sendPhoto(chatId, source, caption ? { caption } : undefined);
   });
 
   // --- Commands ---

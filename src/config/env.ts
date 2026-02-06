@@ -67,6 +67,9 @@ function buildConfig() {
     // Outbound calls
     twilioPhoneNumber: optional("TWILIO_PHONE_NUMBER", ""),
     nicolasPhoneNumber: optional("NICOLAS_PHONE_NUMBER", ""),
+
+    // Gemini (image generation)
+    geminiApiKey: optional("GEMINI_API_KEY", ""),
   };
 }
 
