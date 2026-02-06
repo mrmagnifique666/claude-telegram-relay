@@ -4,4 +4,14 @@ dist/
 sandbox/
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 *.log
+nul
+code-requests.json
+rapports/
+uploads/
+tests/**/*.js
+tests/**/*.d.ts
+tests/**/*.js.map
+PROMPT_FOR_CLI.md
