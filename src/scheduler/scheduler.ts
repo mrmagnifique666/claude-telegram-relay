@@ -3,6 +3,8 @@
  * Uses handleMessage() so Claude generates natural briefings.
  * Timezone: America/Toronto via Intl.DateTimeFormat.
  */
+import fs from "node:fs";
+import path from "node:path";
 import { getDb } from "../storage/store.js";
 import { handleMessage } from "../orchestrator/router.js";
 import { log } from "../utils/log.js";
@@ -37,12 +39,55 @@ const EVENTS: ScheduledEvent[] = [
       "[SCHEDULER] Check-in du soir. Fais un bilan rapide de la journée : ce qui a été fait, rappels manqués, et souhaite une bonne soirée.",
   },
   {
+    key: "code_digest_morning",
+    type: "daily",
+    hour: 9,
+    prompt: null, // dynamic — built at fire time
+  },
+  {
+    key: "code_digest_evening",
+    type: "daily",
+    hour: 21,
+    prompt: null, // dynamic — built at fire time
+  },
+  {
     key: "heartbeat",
     type: "interval",
     intervalMin: 30,
     prompt: null, // silent — monitoring only
   },
 ];
+
+const CODE_REQUESTS_FILE = path.join(process.cwd(), "code-requests.json");
+
+function buildCodeDigestPrompt(): string | null {
+  try {
+    if (!fs.existsSync(CODE_REQUESTS_FILE)) return null;
+    const data = JSON.parse(fs.readFileSync(CODE_REQUESTS_FILE, "utf-8")) as any[];
+    const pending = data.filter(
+      (r) => r.status === "pending" || r.status === "awaiting_execution"
+    );
+    if (pending.length === 0) return null;
+
+    const summary = pending
+      .map((r, i) => {
+        const taskPreview = r.task.length > 150 ? r.task.slice(0, 150) + "..." : r.task;
+        return `${i + 1}. [${r.priority}] ${taskPreview}`;
+      })
+      .join("\n");
+
+    return (
+      `[SCHEDULER] Code Request Digest — ${pending.length} demande(s) en attente.\n\n` +
+      `${summary}\n\n` +
+      `Présente ce digest à Nicolas de façon concise. Pour chaque demande, donne ton avis : ` +
+      `utile/redondant/déjà fait/trop ambitieux. Demande-lui lesquelles exécuter. ` +
+      `Utilise telegram.send pour envoyer le résumé.`
+    );
+  } catch (err) {
+    log.error(`[scheduler] Error building code digest: ${err}`);
+    return null;
+  }
+}
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let schedulerChatId = 0;
@@ -100,6 +145,22 @@ function setLastRun(key: string, epoch: number): void {
 async function fireEvent(event: ScheduledEvent): Promise<void> {
   const nowEpoch = Math.floor(Date.now() / 1000);
   setLastRun(event.key, nowEpoch);
+
+  // Dynamic digest events — build prompt at fire time
+  if (event.key.startsWith("code_digest_")) {
+    const digestPrompt = buildCodeDigestPrompt();
+    if (!digestPrompt) {
+      log.info(`[scheduler] ${event.key}: no pending code requests — skipping`);
+      return;
+    }
+    log.info(`[scheduler] Firing code digest: ${event.key}`);
+    try {
+      await handleMessage(schedulerChatId, digestPrompt, schedulerUserId);
+    } catch (err) {
+      log.error(`[scheduler] Error firing ${event.key}: ${err}`);
+    }
+    return;
+  }
 
   if (event.prompt) {
     log.info(`[scheduler] Firing ${event.type} event: ${event.key}`);

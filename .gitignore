@@ -15,3 +15,4 @@ tests/**/*.js
 tests/**/*.d.ts
 tests/**/*.js.map
 PROMPT_FOR_CLI.md
+relay/gmail/

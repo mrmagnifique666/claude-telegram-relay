@@ -1,53 +1,69 @@
 /**
  * Telegram bot setup using grammY with long polling.
  * Handles text messages, photos, documents, user allowlist checks, and rate limiting.
- * Sends messages with HTML parse mode and converts markdown code blocks.
+ * Features: reactions, debouncing, dedup, streaming, chat lock, advanced formatting.
  */
 import { Bot, InputFile } from "grammy";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config/env.js";
-import { isUserAllowed, tryAdminAuth } from "../security/policy.js";
+import { isUserAllowed, tryAdminAuth, isAdmin } from "../security/policy.js";
 import { consumeToken } from "../security/rateLimit.js";
-import { handleMessage, setProgressCallback } from "../orchestrator/router.js";
-import { clearTurns, clearSession, logError } from "../storage/store.js";
+import { handleMessage, handleMessageStreaming, setProgressCallback } from "../orchestrator/router.js";
+import { clearTurns, clearSession, getTurns, getSession, logError } from "../storage/store.js";
 import { setBotSendFn, setBotVoiceFn, setBotPhotoFn } from "../skills/builtin/telegram.js";
 import { log } from "../utils/log.js";
+import { debounce } from "./debouncer.js";
+import { enqueue } from "./chatLock.js";
+import { sendFormatted } from "./formatting.js";
+import { createDraftController } from "./draftMessage.js";
+import { compactContext } from "../orchestrator/compaction.js";
 
-const MAX_TG_MESSAGE = 4096;
+const startTime = Date.now();
 
-/**
- * Convert basic markdown formatting to Telegram HTML.
- * Handles: ```code blocks```, `inline code`, **bold**, *italic*
- */
-function mdToHtml(text: string): string {
-  // Escape HTML entities first (except in code blocks which we'll handle)
-  let html = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+// --- Reaction Handles ---
 
-  // Fenced code blocks: ```lang\n...\n```
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, _lang, code) => {
-    return `<pre>${code}</pre>`;
-  });
-
-  // Inline code: `...`
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-
-  // Bold: **...**
-  html = html.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
-
-  // Italic: *...*  (but not inside bold which we already converted)
-  html = html.replace(/(?<![<b>])\*(.+?)\*(?![</b>])/g, "<i>$1</i>");
-
-  return html;
+interface ReactionHandle {
+  ack(): Promise<void>;
+  done(): Promise<void>;
+  error(): Promise<void>;
 }
 
-/**
- * Download a Telegram file to the uploads directory.
- * Returns the local file path.
- */
+function createReactionHandle(bot: Bot, chatId: number, messageId: number): ReactionHandle {
+  const set = async (emoji: string) => {
+    if (!config.reactionsEnabled) return;
+    try {
+      await bot.api.setMessageReaction(chatId, messageId, [{ type: "emoji", emoji }]);
+    } catch { /* non-fatal — reactions may not be supported in all chats */ }
+  };
+  return {
+    ack: () => set("👀"),
+    done: () => set("✅"),
+    error: () => set("❌"),
+  };
+}
+
+// --- Update Dedup ---
+
+const recentUpdateIds = new Set<number>();
+const MAX_DEDUP_SIZE = 200;
+
+function isDuplicate(updateId: number): boolean {
+  if (recentUpdateIds.has(updateId)) return true;
+  recentUpdateIds.add(updateId);
+  // Prune if too large
+  if (recentUpdateIds.size > MAX_DEDUP_SIZE) {
+    const iter = recentUpdateIds.values();
+    for (let i = 0; i < 50; i++) iter.next();
+    // Delete oldest entries
+    const arr = Array.from(recentUpdateIds);
+    for (let i = 0; i < 50; i++) recentUpdateIds.delete(arr[i]);
+  }
+  return false;
+}
+
+// --- File Download ---
+
 async function downloadTelegramFile(
   bot: Bot,
   fileId: string,
@@ -67,15 +83,38 @@ async function downloadTelegramFile(
   return localPath;
 }
 
+// --- sendLong (legacy fallback, used for non-streaming paths) ---
+
+async function sendLong(
+  ctx: { reply: (text: string, options?: { parse_mode?: string }) => Promise<unknown> },
+  text: string
+) {
+  await sendFormatted(
+    (chunk, parseMode) => ctx.reply(chunk, parseMode ? { parse_mode: parseMode } : undefined),
+    text
+  );
+}
+
+// --- Bot Creation ---
+
 export function createBot(): Bot {
   const bot = new Bot(config.telegramToken);
   const bootTime = Math.floor(Date.now() / 1000);
 
-  // Drop messages sent before this boot (prevents re-delivery after restart)
+  // Middleware: drop stale messages from before boot
   bot.use(async (ctx, next) => {
     const msgDate = ctx.message?.date ?? ctx.editedMessage?.date ?? 0;
     if (msgDate > 0 && msgDate < bootTime) {
       log.debug(`Dropping stale message (date=${msgDate}, boot=${bootTime})`);
+      return;
+    }
+    await next();
+  });
+
+  // Middleware: update deduplication
+  bot.use(async (ctx, next) => {
+    if (ctx.update.update_id && isDuplicate(ctx.update.update_id)) {
+      log.debug(`Dropping duplicate update ${ctx.update.update_id}`);
       return;
     }
     await next();
@@ -113,6 +152,9 @@ export function createBot(): Bot {
       "Hello! I'm an OpenClaw relay bot. Send me a message and I'll pass it to Claude.\n\n" +
         "Commands:\n" +
         "/clear — reset conversation history\n" +
+        "/new — start a new conversation\n" +
+        "/status — show session info\n" +
+        "/compact — compact context history\n" +
         "/help — list available tools\n" +
         "/admin &lt;passphrase&gt; — unlock admin tools",
       { parse_mode: "HTML" }
@@ -124,6 +166,55 @@ export function createBot(): Bot {
     clearTurns(chatId);
     clearSession(chatId);
     await ctx.reply("Conversation history and session cleared.");
+  });
+
+  bot.command("new", async (ctx) => {
+    const chatId = ctx.chat.id;
+    clearTurns(chatId);
+    clearSession(chatId);
+    await ctx.reply("Nouvelle conversation. Comment puis-je t'aider ?");
+  });
+
+  bot.command("status", async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId || !isUserAllowed(userId)) {
+      await ctx.reply("You are not authorised to use this bot.");
+      return;
+    }
+    const chatId = ctx.chat.id;
+    const turns = getTurns(chatId);
+    const session = getSession(chatId);
+    const adminStatus = isAdmin(userId);
+    const uptimeMs = Date.now() - startTime;
+    const uptimeMin = Math.floor(uptimeMs / 60000);
+    const uptimeH = Math.floor(uptimeMin / 60);
+    const uptimeStr = uptimeH > 0 ? `${uptimeH}h ${uptimeMin % 60}m` : `${uptimeMin}m`;
+
+    const lines = [
+      `<b>Status</b>`,
+      ``,
+      `<b>Model:</b> ${config.claudeModel}`,
+      `<b>Session:</b> ${session ? session.slice(0, 12) + "..." : "none"}`,
+      `<b>Turns:</b> ${turns.length}`,
+      `<b>Uptime:</b> ${uptimeStr}`,
+      `<b>Streaming:</b> ${config.streamingEnabled ? "on" : "off"}`,
+      `<b>Admin:</b> ${adminStatus ? "yes" : "no"}`,
+      `<b>Reactions:</b> ${config.reactionsEnabled ? "on" : "off"}`,
+      `<b>Debounce:</b> ${config.debounceEnabled ? `on (${config.debounceMs}ms)` : "off"}`,
+    ];
+    await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+  });
+
+  bot.command("compact", async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId || !isUserAllowed(userId)) {
+      await ctx.reply("You are not authorised to use this bot.");
+      return;
+    }
+    const chatId = ctx.chat.id;
+    await ctx.replyWithChatAction("typing");
+    const result = await compactContext(chatId, userId);
+    await ctx.reply(result);
   });
 
   bot.command("help", async (ctx) => {
@@ -155,12 +246,13 @@ export function createBot(): Bot {
     }
   });
 
-  // --- Text message handler ---
+  // --- Text message handler (with debouncing, reactions, streaming, chat lock) ---
 
   bot.on("message:text", async (ctx) => {
     const userId = ctx.from.id;
     const chatId = ctx.chat.id;
     const text = ctx.message.text;
+    const messageId = ctx.message.message_id;
 
     // Allowlist check
     if (!isUserAllowed(userId)) {
@@ -171,27 +263,56 @@ export function createBot(): Bot {
 
     // Rate limit
     if (!consumeToken(userId)) {
-      await ctx.reply(
-        "Slow down! Please wait a moment before sending another message."
-      );
+      await ctx.reply("Slow down! Please wait a moment before sending another message.");
       return;
     }
 
-    log.info(
-      `Message from user ${userId} in chat ${chatId}: ${text.slice(0, 80)}...`
-    );
+    log.info(`Message from user ${userId} in chat ${chatId}: ${text.slice(0, 80)}...`);
 
-    // Show typing indicator
-    await ctx.replyWithChatAction("typing");
-
-    try {
-      const response = await handleMessage(chatId, text, userId);
-      await sendLong(ctx, response);
-    } catch (err) {
-      log.error("Error handling message:", err);
-      logError(err instanceof Error ? err : String(err), "telegram:text_handler");
-      await ctx.reply("Sorry, something went wrong processing your message.");
+    // Debounce: buffer rapid messages
+    const combined = await debounce(chatId, text);
+    if (combined === null) {
+      log.debug(`[telegram] Message buffered by debouncer for chat ${chatId}`);
+      return; // Another message will carry the combined payload
     }
+
+    // Enqueue via chat lock for sequential processing
+    enqueue(chatId, async () => {
+      const reaction = createReactionHandle(bot, chatId, messageId);
+      await reaction.ack();
+
+      // Show typing indicator
+      try { await bot.api.sendChatAction(chatId, "typing"); } catch { /* ignore */ }
+
+      // Prepend message metadata for Claude context
+      const msgTime = new Date(ctx.message.date * 1000).toISOString();
+      const fromName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : "");
+      const fromTag = ctx.from.username ? ` @${ctx.from.username}` : "";
+      const replyInfo = ctx.message.reply_to_message ? ` replyTo=#${ctx.message.reply_to_message.message_id}` : "";
+      const meta = `[msg:${messageId} time:${msgTime} from:${fromName}${fromTag}${replyInfo}]`;
+      const messageWithMeta = `${meta}\n${combined}`;
+
+      try {
+        if (config.streamingEnabled) {
+          const draft = createDraftController(bot, chatId);
+          const response = await handleMessageStreaming(chatId, messageWithMeta, userId, draft);
+          // Draft controller already sent/edited the message if streaming worked.
+          // If draft has no message (e.g. tool call path), send the response normally.
+          if (!draft.getMessageId()) {
+            await sendLong(ctx, response);
+          }
+        } else {
+          const response = await handleMessage(chatId, messageWithMeta, userId);
+          await sendLong(ctx, response);
+        }
+        await reaction.done();
+      } catch (err) {
+        log.error("Error handling message:", err);
+        logError(err instanceof Error ? err : String(err), "telegram:text_handler");
+        await reaction.error();
+        await ctx.reply("Sorry, something went wrong processing your message.");
+      }
+    });
   });
 
   // --- Photo handler ---
@@ -208,31 +329,37 @@ export function createBot(): Bot {
     }
 
     const chatId = ctx.chat.id;
+    const messageId = ctx.message.message_id;
     const caption = ctx.message.caption || "";
-    // Telegram provides multiple sizes — take the largest (last)
     const photos = ctx.message.photo;
     const largest = photos[photos.length - 1];
 
-    await ctx.replyWithChatAction("typing");
+    enqueue(chatId, async () => {
+      const reaction = createReactionHandle(bot, chatId, messageId);
+      await reaction.ack();
+      try { await bot.api.sendChatAction(chatId, "typing"); } catch { /* ignore */ }
 
-    let localPath: string | undefined;
-    try {
-      const filename = `photo_${chatId}_${Date.now()}.jpg`;
-      localPath = await downloadTelegramFile(bot, largest.file_id, filename);
-      log.info(`Downloaded photo to ${localPath}`);
+      let localPath: string | undefined;
+      try {
+        const filename = `photo_${chatId}_${Date.now()}.jpg`;
+        localPath = await downloadTelegramFile(bot, largest.file_id, filename);
+        log.info(`Downloaded photo to ${localPath}`);
 
-      const message = `[Image: ${localPath}]\n${caption}`.trim();
-      const response = await handleMessage(chatId, message, userId);
-      await sendLong(ctx, response);
-    } catch (err) {
-      log.error("Error handling photo:", err);
-      logError(err instanceof Error ? err : String(err), "telegram:photo_handler");
-      await ctx.reply("Sorry, something went wrong processing your photo.");
-    } finally {
-      if (localPath && fs.existsSync(localPath)) {
-        fs.unlinkSync(localPath);
+        const message = `[Image: ${localPath}]\n${caption}`.trim();
+        const response = await handleMessage(chatId, message, userId);
+        await sendLong(ctx, response);
+        await reaction.done();
+      } catch (err) {
+        log.error("Error handling photo:", err);
+        logError(err instanceof Error ? err : String(err), "telegram:photo_handler");
+        await reaction.error();
+        await ctx.reply("Sorry, something went wrong processing your photo.");
+      } finally {
+        if (localPath && fs.existsSync(localPath)) {
+          fs.unlinkSync(localPath);
+        }
       }
-    }
+    });
   });
 
   // --- Document handler ---
@@ -249,30 +376,37 @@ export function createBot(): Bot {
     }
 
     const chatId = ctx.chat.id;
+    const messageId = ctx.message.message_id;
     const caption = ctx.message.caption || "";
     const doc = ctx.message.document;
     const originalName = doc.file_name || `file_${Date.now()}`;
 
-    await ctx.replyWithChatAction("typing");
+    enqueue(chatId, async () => {
+      const reaction = createReactionHandle(bot, chatId, messageId);
+      await reaction.ack();
+      try { await bot.api.sendChatAction(chatId, "typing"); } catch { /* ignore */ }
 
-    let localPath: string | undefined;
-    try {
-      const filename = `doc_${chatId}_${Date.now()}_${originalName}`;
-      localPath = await downloadTelegramFile(bot, doc.file_id, filename);
-      log.info(`Downloaded document to ${localPath}`);
+      let localPath: string | undefined;
+      try {
+        const filename = `doc_${chatId}_${Date.now()}_${originalName}`;
+        localPath = await downloadTelegramFile(bot, doc.file_id, filename);
+        log.info(`Downloaded document to ${localPath}`);
 
-      const message = `[File: ${localPath}]\n${caption}`.trim();
-      const response = await handleMessage(chatId, message, userId);
-      await sendLong(ctx, response);
-    } catch (err) {
-      log.error("Error handling document:", err);
-      logError(err instanceof Error ? err : String(err), "telegram:document_handler");
-      await ctx.reply("Sorry, something went wrong processing your file.");
-    } finally {
-      if (localPath && fs.existsSync(localPath)) {
-        fs.unlinkSync(localPath);
+        const message = `[File: ${localPath}]\n${caption}`.trim();
+        const response = await handleMessage(chatId, message, userId);
+        await sendLong(ctx, response);
+        await reaction.done();
+      } catch (err) {
+        log.error("Error handling document:", err);
+        logError(err instanceof Error ? err : String(err), "telegram:document_handler");
+        await reaction.error();
+        await ctx.reply("Sorry, something went wrong processing your file.");
+      } finally {
+        if (localPath && fs.existsSync(localPath)) {
+          fs.unlinkSync(localPath);
+        }
       }
-    }
+    });
   });
 
   // --- Voice message handler ---
@@ -295,51 +429,4 @@ export function createBot(): Bot {
   });
 
   return bot;
-}
-
-/**
- * Send a potentially long message, splitting at Telegram's 4096 char limit.
- * Uses HTML parse mode with markdown-to-HTML conversion.
- */
-async function sendLong(
-  ctx: {
-    reply: (
-      text: string,
-      options?: { parse_mode?: string }
-    ) => Promise<unknown>;
-  },
-  text: string
-) {
-  const html = mdToHtml(text);
-
-  if (html.length <= MAX_TG_MESSAGE) {
-    try {
-      await ctx.reply(html, { parse_mode: "HTML" });
-    } catch (err) {
-      log.warn(`[sendLong] HTML parse failed, falling back to plain text: ${err}`);
-      await ctx.reply(text);
-    }
-    return;
-  }
-
-  // Split on newlines or hard-cut
-  let remaining = html;
-  while (remaining.length > 0) {
-    let chunk: string;
-    if (remaining.length <= MAX_TG_MESSAGE) {
-      chunk = remaining;
-      remaining = "";
-    } else {
-      const cutAt = remaining.lastIndexOf("\n", MAX_TG_MESSAGE);
-      const splitPos = cutAt > MAX_TG_MESSAGE * 0.5 ? cutAt : MAX_TG_MESSAGE;
-      chunk = remaining.slice(0, splitPos);
-      remaining = remaining.slice(splitPos);
-    }
-    try {
-      await ctx.reply(chunk, { parse_mode: "HTML" });
-    } catch (err) {
-      log.warn(`[sendLong] HTML chunk parse failed, falling back: ${err}`);
-      await ctx.reply(chunk);
-    }
-  }
 }

@@ -72,8 +72,32 @@ function buildConfig() {
     // Gemini (image generation)
     geminiApiKey: optional("GEMINI_API_KEY", ""),
 
+    // Anthropic API (for vision / computer-use)
+    anthropicApiKey: optional("ANTHROPIC_API_KEY", ""),
+
+    // Browser (Puppeteer)
+    browserMode: optional("BROWSER_MODE", "visible") as "headless" | "visible" | "connect",
+    browserCdpUrl: optional("BROWSER_CDP_URL", ""),
+    browserChromePath: optional("BROWSER_CHROME_PATH", ""),
+    browserViewportWidth: Number(optional("BROWSER_VIEWPORT_WIDTH", "1280")),
+    browserViewportHeight: Number(optional("BROWSER_VIEWPORT_HEIGHT", "720")),
+    browserTimeoutMs: Number(optional("BROWSER_TIMEOUT_MS", "30000")),
+    browserIdleMs: Number(optional("BROWSER_IDLE_MS", "300000")),
+
+    // Gmail
+    gmailCredentialsPath: optional("GMAIL_CREDENTIALS_PATH", "./relay/gmail/credentials.json"),
+    gmailTokenPath: optional("GMAIL_TOKEN_PATH", "./relay/gmail/token.json"),
+
     // Brave Search
     braveSearchApiKey: optional("BRAVE_SEARCH_API_KEY", ""),
+
+    // OpenClaw enhancements
+    reactionsEnabled: optional("REACTIONS_ENABLED", "true") === "true",
+    debounceEnabled: optional("DEBOUNCE_ENABLED", "true") === "true",
+    debounceMs: Number(optional("DEBOUNCE_MS", "1500")),
+    streamingEnabled: optional("STREAMING_ENABLED", "true") === "true",
+    draftEditIntervalMs: Number(optional("DRAFT_EDIT_INTERVAL_MS", "300")),
+    draftStartThreshold: Number(optional("DRAFT_START_THRESHOLD", "40")),
   };
 }
 
