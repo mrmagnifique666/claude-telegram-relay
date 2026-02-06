@@ -124,14 +124,23 @@ export function createBot(): Bot {
   setProgressCallback(async (chatId, message) => {
     try {
       await bot.api.sendMessage(chatId, message, { parse_mode: "Markdown" });
-    } catch (err) {
-      log.error("Failed to send progress update:", err);
+    } catch {
+      try {
+        await bot.api.sendMessage(chatId, message);
+      } catch (err) {
+        log.error("Failed to send progress update:", err);
+      }
     }
   });
 
   // Wire bot API into telegram.send skill
   setBotSendFn(async (chatId, text) => {
-    await bot.api.sendMessage(chatId, text, { parse_mode: "Markdown" });
+    try {
+      await bot.api.sendMessage(chatId, text, { parse_mode: "Markdown" });
+    } catch {
+      // Fallback: send without Markdown if parsing fails (e.g. unescaped special chars)
+      await bot.api.sendMessage(chatId, text);
+    }
   });
 
   // Wire bot API into telegram.voice skill

@@ -6,7 +6,7 @@
  * HTTP server, exchanges it for tokens, and saves them.
  */
 import http from "node:http";
-import { loadCredentials, createOAuth2Client, getAuthUrl, saveToken } from "./auth.js";
+import { loadCredentials, createOAuth2Client, saveToken, SCOPES } from "./auth.js";
 
 const PORT = 3456;
 
@@ -17,7 +17,7 @@ async function main() {
 
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: "offline",
-    scope: ["https://www.googleapis.com/auth/gmail.modify"],
+    scope: SCOPES,
     prompt: "consent",
   });
 
@@ -45,7 +45,7 @@ async function main() {
 
       if (code) {
         res.writeHead(200, { "Content-Type": "text/html" });
-        res.end("<h1>Gmail auth successful!</h1><p>You can close this tab and return to the terminal.</p>");
+        res.end("<h1>Google auth successful!</h1><p>Gmail + Calendar authorized. You can close this tab.</p>");
         server.close();
         resolve(code);
         return;
@@ -67,7 +67,7 @@ async function main() {
   console.log("[gmail:auth] Received authorization code, exchanging for token...");
   const { tokens } = await oauth2Client.getToken(code);
   saveToken(tokens as Record<string, unknown>);
-  console.log("[gmail:auth] Done! Token saved. Kingston can now access Gmail.");
+  console.log("[gmail:auth] Done! Token saved. Kingston can now access Gmail + Calendar.");
 }
 
 main().catch((err) => {

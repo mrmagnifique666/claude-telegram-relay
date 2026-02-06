@@ -7,9 +7,12 @@ import { isToolPermitted } from "../security/policy.js";
 import { isAdmin } from "../security/policy.js";
 import { getSkill, validateArgs } from "../skills/loader.js";
 import { runClaude } from "../llm/claudeCli.js";
+import { runClaudeStream, type StreamResult } from "../llm/claudeStream.js";
 import { addTurn, logError } from "../storage/store.js";
+import { autoCompact } from "./compaction.js";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
+import type { DraftController } from "../bot/draftMessage.js";
 
 /**
  * Callback to send intermediate progress updates to the user.
@@ -79,8 +82,8 @@ export async function handleMessage(
       log.debug(`[router] Normalized message → text for ${tool}`);
     }
 
-    // Auto-inject chatId for telegram.* skills when missing
-    if (tool.startsWith("telegram.") && !safeArgs.chatId) {
+    // Auto-inject chatId for telegram.*/browser.* skills when missing
+    if ((tool.startsWith("telegram.") || tool.startsWith("browser.")) && !safeArgs.chatId) {
       safeArgs.chatId = String(chatId);
       log.debug(`[router] Auto-injected chatId=${chatId} for ${tool}`);
     }
@@ -202,4 +205,183 @@ export async function handleMessage(
   const text = result.type === "message" ? result.text : "(unexpected state)";
   addTurn(chatId, { role: "assistant", content: text });
   return text;
+}
+
+/**
+ * Handle a user message with streaming output.
+ * The final text response is streamed to the draft controller in real-time.
+ * Tool calls during streaming suppress the draft and execute normally.
+ * Only the final response is streamed — intermediate tool chain steps use batch mode.
+ */
+export async function handleMessageStreaming(
+  chatId: number,
+  userMessage: string,
+  userId: number,
+  draft: DraftController
+): Promise<string> {
+  const userIsAdmin = isAdmin(userId);
+
+  addTurn(chatId, { role: "user", content: userMessage });
+
+  log.info(`[router] Streaming to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
+
+  // First pass: try streaming
+  const streamResult = await runClaudeStreamAsync(chatId, userMessage, userIsAdmin, draft);
+
+  // If it's a plain text response, we're done (draft already has the content)
+  if (!streamResult.is_tool_call) {
+    addTurn(chatId, { role: "assistant", content: streamResult.text });
+    await draft.finalize();
+    return streamResult.text;
+  }
+
+  // It's a tool call — cancel the draft and process the tool chain in batch mode
+  await draft.cancel();
+
+  let result = {
+    type: streamResult.is_tool_call ? "tool_call" as const : "message" as const,
+    text: streamResult.text,
+    tool: streamResult.tool || "",
+    args: streamResult.args || {},
+    session_id: streamResult.session_id,
+  };
+
+  // Tool chaining loop (batch mode for intermediate steps)
+  for (let step = 0; step < config.maxToolChain; step++) {
+    if (result.type !== "tool_call") break;
+
+    const { tool, args: rawArgs } = result;
+
+    if (!tool || typeof tool !== "string") {
+      const errorMsg = "Tool call missing or invalid tool name.";
+      addTurn(chatId, { role: "assistant", content: errorMsg });
+      return errorMsg;
+    }
+    const safeArgs = (rawArgs && typeof rawArgs === "object" ? rawArgs : {}) as Record<string, unknown>;
+
+    // Normalize arg aliases
+    if (safeArgs.chat_id !== undefined && safeArgs.chatId === undefined) {
+      safeArgs.chatId = safeArgs.chat_id;
+      delete safeArgs.chat_id;
+    }
+    if (safeArgs.message !== undefined && safeArgs.text === undefined) {
+      safeArgs.text = safeArgs.message;
+      delete safeArgs.message;
+    }
+    if ((tool.startsWith("telegram.") || tool.startsWith("browser.")) && !safeArgs.chatId) {
+      safeArgs.chatId = String(chatId);
+    }
+
+    if (!isToolPermitted(tool, userId)) {
+      const msg = `Tool "${tool}" is not permitted.`;
+      addTurn(chatId, { role: "assistant", content: msg });
+      return msg;
+    }
+
+    const skill = getSkill(tool);
+    if (!skill) {
+      const followUp = `[Tool "${tool}" error]:\nUnknown tool "${tool}".`;
+      addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
+      addTurn(chatId, { role: "user", content: followUp });
+      const batchResult = await runClaude(chatId, followUp, userIsAdmin);
+      if (batchResult.type === "message") {
+        addTurn(chatId, { role: "assistant", content: batchResult.text });
+        return batchResult.text;
+      }
+      result = batchResultToRouterResult(batchResult);
+      continue;
+    }
+
+    const validationError = validateArgs(safeArgs, skill.argsSchema);
+    if (validationError) {
+      const followUp = `[Tool "${tool}" error]:\nArgument error: ${validationError}.`;
+      addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
+      addTurn(chatId, { role: "user", content: followUp });
+      const batchResult = await runClaude(chatId, followUp, userIsAdmin);
+      if (batchResult.type === "message") {
+        addTurn(chatId, { role: "assistant", content: batchResult.text });
+        return batchResult.text;
+      }
+      result = batchResultToRouterResult(batchResult);
+      continue;
+    }
+
+    log.info(`[router-stream] Executing tool (step ${step + 1}): ${tool}`);
+    let toolResult: string;
+    try {
+      toolResult = await skill.execute(safeArgs);
+    } catch (err) {
+      const errorMsg = `Tool "${tool}" failed: ${err instanceof Error ? err.message : String(err)}`;
+      const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
+      addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
+      addTurn(chatId, { role: "user", content: followUp });
+      const batchResult = await runClaude(chatId, followUp, userIsAdmin);
+      if (batchResult.type === "message") {
+        addTurn(chatId, { role: "assistant", content: batchResult.text });
+        return batchResult.text;
+      }
+      result = batchResultToRouterResult(batchResult);
+      continue;
+    }
+
+    if (progressCallback) {
+      const preview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
+      await progressCallback(chatId, `⚙️ **${tool}**\n\`\`\`\n${preview}\n\`\`\``);
+    }
+
+    const followUp = `[Tool "${tool}" returned]:\n${toolResult}`;
+    addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
+    addTurn(chatId, { role: "user", content: followUp });
+
+    // For the final step (or if this is the last tool), try streaming the response
+    const batchResult = await runClaude(chatId, followUp, userIsAdmin);
+    if (batchResult.type === "message") {
+      addTurn(chatId, { role: "assistant", content: batchResult.text });
+      return batchResult.text;
+    }
+    result = batchResultToRouterResult(batchResult);
+  }
+
+  if (result.type === "tool_call") {
+    const msg = `Reached tool chain limit (${config.maxToolChain} steps).`;
+    addTurn(chatId, { role: "assistant", content: msg });
+    return msg;
+  }
+
+  const text = result.type === "message" ? result.text : "(unexpected state)";
+  addTurn(chatId, { role: "assistant", content: text });
+  return text;
+}
+
+/** Run Claude stream and return a promise that resolves with the result. */
+function runClaudeStreamAsync(
+  chatId: number,
+  userMessage: string,
+  isAdminUser: boolean,
+  draft: DraftController
+): Promise<StreamResult> {
+  return new Promise<StreamResult>((resolve, reject) => {
+    runClaudeStream(chatId, userMessage, isAdminUser, {
+      onDelta(text: string) {
+        // Only update draft if it doesn't look like a tool call
+        if (!text.trimStart().startsWith('{"type":"tool_call"')) {
+          draft.update(text).catch(() => {});
+        }
+      },
+      onComplete(result: StreamResult) {
+        resolve(result);
+      },
+      onError(error: Error) {
+        reject(error);
+      },
+    });
+  });
+}
+
+/** Convert a batch ParsedResult to the router's internal format. */
+function batchResultToRouterResult(r: { type: string; text?: string; tool?: string; args?: Record<string, unknown> }) {
+  if (r.type === "tool_call") {
+    return { type: "tool_call" as const, text: "", tool: r.tool || "", args: r.args || {} };
+  }
+  return { type: "message" as const, text: (r as any).text || "", tool: "", args: {} };
 }

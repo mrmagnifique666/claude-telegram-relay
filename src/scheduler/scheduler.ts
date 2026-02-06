@@ -54,7 +54,7 @@ const EVENTS: ScheduledEvent[] = [
     key: "heartbeat",
     type: "interval",
     intervalMin: 30,
-    prompt: null, // silent — monitoring only
+    prompt: null, // dynamic — proactive checks at fire time
   },
 ];
 
@@ -87,6 +87,81 @@ function buildCodeDigestPrompt(): string | null {
     log.error(`[scheduler] Error building code digest: ${err}`);
     return null;
   }
+}
+
+/**
+ * Proactive heartbeat — checks for unread emails and upcoming calendar events.
+ * Returns a prompt for Claude if there's something worth notifying, null otherwise.
+ */
+async function buildHeartbeatPrompt(): Promise<string | null> {
+  const alerts: string[] = [];
+
+  // Check unread emails (last 30 minutes)
+  try {
+    const { getGmailClient } = await import("../gmail/auth.js");
+    const gmail = getGmailClient();
+    const res = await gmail.users.messages.list({
+      userId: "me",
+      q: "is:unread newer_than:30m",
+      maxResults: 5,
+    });
+    const messages = res.data.messages;
+    if (messages && messages.length > 0) {
+      const details: string[] = [];
+      for (const msg of messages.slice(0, 3)) {
+        const detail = await gmail.users.messages.get({
+          userId: "me",
+          id: msg.id!,
+          format: "metadata",
+          metadataHeaders: ["From", "Subject"],
+        });
+        const headers = detail.data.payload?.headers || [];
+        const from = headers.find((h: any) => h.name === "From")?.value || "?";
+        const subject = headers.find((h: any) => h.name === "Subject")?.value || "(no subject)";
+        details.push(`- ${from}: ${subject}`);
+      }
+      const extra = messages.length > 3 ? ` (+${messages.length - 3} more)` : "";
+      alerts.push(`**Emails non lus (${messages.length}):**${extra}\n${details.join("\n")}`);
+    }
+  } catch (err) {
+    log.debug(`[heartbeat] Gmail check failed: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // Check upcoming calendar events (next 30 minutes)
+  try {
+    const { getCalendarClient } = await import("../gmail/auth.js");
+    const calendar = getCalendarClient();
+    const now = new Date();
+    const in30min = new Date(now.getTime() + 30 * 60_000);
+    const res = await calendar.events.list({
+      calendarId: "primary",
+      timeMin: now.toISOString(),
+      timeMax: in30min.toISOString(),
+      singleEvents: true,
+      orderBy: "startTime",
+      timeZone: TZ,
+    });
+    const events = res.data.items;
+    if (events && events.length > 0) {
+      const details = events.map((e: any) => {
+        const start = e.start?.dateTime
+          ? new Date(e.start.dateTime).toLocaleTimeString("fr-CA", { timeZone: TZ, timeStyle: "short" })
+          : "all-day";
+        return `- ${start}: ${e.summary || "(sans titre)"}`;
+      });
+      alerts.push(`**Events dans les 30 prochaines minutes:**\n${details.join("\n")}`);
+    }
+  } catch (err) {
+    log.debug(`[heartbeat] Calendar check failed: ${err instanceof Error ? err.message : err}`);
+  }
+
+  if (alerts.length === 0) return null;
+
+  return (
+    `[SCHEDULER] Heartbeat proactif — notifications:\n\n${alerts.join("\n\n")}\n\n` +
+    `Notifie Nicolas de ces éléments de façon concise via telegram.send. ` +
+    `Pour les emails, mentionne l'expéditeur et le sujet. Pour le calendrier, mentionne l'heure et le titre.`
+  );
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -162,6 +237,23 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     return;
   }
 
+  // Proactive heartbeat — check emails + calendar
+  if (event.key === "heartbeat") {
+    log.debug(`[scheduler] Heartbeat tick — checking proactive alerts`);
+    try {
+      const heartbeatPrompt = await buildHeartbeatPrompt();
+      if (heartbeatPrompt) {
+        log.info(`[scheduler] Heartbeat found alerts — notifying`);
+        await handleMessage(schedulerChatId, heartbeatPrompt, schedulerUserId);
+      } else {
+        log.debug(`[scheduler] Heartbeat — nothing to report`);
+      }
+    } catch (err) {
+      log.error(`[scheduler] Heartbeat error: ${err}`);
+    }
+    return;
+  }
+
   if (event.prompt) {
     log.info(`[scheduler] Firing ${event.type} event: ${event.key}`);
     try {
@@ -169,8 +261,6 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     } catch (err) {
       log.error(`[scheduler] Error firing ${event.key}: ${err}`);
     }
-  } else {
-    log.debug(`[scheduler] Heartbeat tick`);
   }
 }
 
