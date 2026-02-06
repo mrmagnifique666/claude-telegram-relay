@@ -22,7 +22,17 @@ export function connectDeepgram(callbacks: DeepgramCallbacks): WebSocket {
     language: lang,
     punctuate: "true",
     endpointing: "300",
+    smart_format: "true",
   });
+
+  // Boost real estate vocabulary
+  const keywords = [
+    "immobilier", "hypothèque", "MLS", "courtier", "notaire",
+    "mise de fonds", "copropriété", "promesse d'achat", "acte de vente",
+  ];
+  for (const kw of keywords) {
+    params.append("keywords", kw);
+  }
 
   const url = `wss://api.deepgram.com/v1/listen?${params}`;
   const ws = new WebSocket(url, {

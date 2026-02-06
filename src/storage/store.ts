@@ -45,6 +45,15 @@ export function getDb(): Database.Database {
         user_id INTEGER PRIMARY KEY,
         authenticated_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
+
+      CREATE TABLE IF NOT EXISTS error_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp INTEGER NOT NULL DEFAULT (unixepoch()),
+        error_message TEXT NOT NULL,
+        stack TEXT,
+        context TEXT,
+        resolved INTEGER NOT NULL DEFAULT 0
+      );
     `);
     log.info(`SQLite store initialised at ${dbPath}`);
   }
@@ -149,4 +158,39 @@ export function isAdminSession(userId: number): boolean {
 export function clearAdminSession(userId: number): void {
   const d = getDb();
   d.prepare("DELETE FROM admin_sessions WHERE user_id = ?").run(userId);
+}
+
+// --- Error logging ---
+
+export interface ErrorLogRow {
+  id: number;
+  timestamp: number;
+  error_message: string;
+  stack: string | null;
+  context: string | null;
+  resolved: number;
+}
+
+export function logError(error: Error | string, context?: string): number {
+  const d = getDb();
+  const message = error instanceof Error ? error.message : error;
+  const stack = error instanceof Error ? error.stack ?? null : null;
+  const info = d
+    .prepare("INSERT INTO error_log (error_message, stack, context) VALUES (?, ?, ?)")
+    .run(message, stack, context ?? null);
+  log.debug(`[error_log] Recorded error #${info.lastInsertRowid}: ${message.slice(0, 80)}`);
+  return info.lastInsertRowid as number;
+}
+
+export function getRecentErrors(count = 20): ErrorLogRow[] {
+  const d = getDb();
+  return d
+    .prepare("SELECT * FROM error_log ORDER BY id DESC LIMIT ?")
+    .all(count) as ErrorLogRow[];
+}
+
+export function resolveError(id: number): boolean {
+  const d = getDb();
+  const info = d.prepare("UPDATE error_log SET resolved = 1 WHERE id = ?").run(id);
+  return info.changes > 0;
 }

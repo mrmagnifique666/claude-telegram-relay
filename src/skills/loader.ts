@@ -97,6 +97,11 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/api.js");
   await import("./builtin/db.js");
   await import("./builtin/telegram.js");
+  await import("./builtin/scheduler.js");
+  await import("./builtin/errors.js");
+  await import("./builtin/config.js");
+  await import("./builtin/audit.js");
+  await import("./builtin/phone.js");
   await import("./custom/code-request.js");
   log.info(`Loaded ${registry.size} built-in skills.`);
 }

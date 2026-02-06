@@ -5,7 +5,7 @@ import http from "node:http";
 import { WebSocketServer } from "ws";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
-import { buildTwiml } from "./twiml.js";
+import { buildTwiml, buildOutboundTwiml } from "./twiml.js";
 import { handleTwilioStream } from "./pipeline.js";
 
 export function startVoiceServer(): void {
@@ -27,6 +27,16 @@ export function startVoiceServer(): void {
       res.writeHead(200, { "Content-Type": "text/xml" });
       res.end(twiml);
       log.info("[voice] Served TwiML for incoming call");
+      return;
+    }
+
+    if (req.method === "POST" && req.url?.startsWith("/voice/outbound-twiml")) {
+      const parsed = new URL(req.url, `http://localhost:${config.voicePort}`);
+      const reason = parsed.searchParams.get("reason") || "Kingston vous appelle.";
+      const twiml = buildOutboundTwiml(reason);
+      res.writeHead(200, { "Content-Type": "text/xml" });
+      res.end(twiml);
+      log.info(`[voice] Served outbound TwiML — reason: ${reason.slice(0, 60)}`);
       return;
     }
 

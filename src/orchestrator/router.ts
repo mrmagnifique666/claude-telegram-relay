@@ -7,7 +7,7 @@ import { isToolPermitted } from "../security/policy.js";
 import { isAdmin } from "../security/policy.js";
 import { getSkill, validateArgs } from "../skills/loader.js";
 import { runClaude } from "../llm/claudeCli.js";
-import { addTurn } from "../storage/store.js";
+import { addTurn, logError } from "../storage/store.js";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 
@@ -86,6 +86,7 @@ export async function handleMessage(
     if (!skill) {
       const errorMsg = `Error: Unknown tool "${tool}". Check the tool catalog and try again.`;
       log.warn(`[router] ${errorMsg}`);
+      logError(errorMsg, "router:unknown_tool");
       if (progressCallback) {
         await progressCallback(chatId, `❌ Unknown tool: ${tool}`);
       }
@@ -105,6 +106,7 @@ export async function handleMessage(
     if (validationError) {
       const errorMsg = `Tool "${tool}" argument error: ${validationError}. Fix the arguments and try again.`;
       log.warn(`[router] ${errorMsg}`);
+      logError(errorMsg, "router:validation");
       if (progressCallback) {
         await progressCallback(chatId, `❌ Arg error on ${tool}`);
       }
@@ -127,6 +129,7 @@ export async function handleMessage(
     } catch (err) {
       const errorMsg = `Tool "${tool}" execution failed: ${err instanceof Error ? err.message : String(err)}`;
       log.error(errorMsg);
+      logError(err instanceof Error ? err : errorMsg, `router:exec:${tool}`);
       if (progressCallback) {
         await progressCallback(chatId, `❌ ${tool} failed`);
       }
@@ -171,6 +174,7 @@ export async function handleMessage(
   // If we exhausted the chain limit and still got a tool_call
   if (result.type === "tool_call") {
     const msg = `Reached tool chain limit (${config.maxToolChain} steps). Last pending tool: ${result.tool}.`;
+    logError(msg, "router:chain_limit");
     if (progressCallback) {
       await progressCallback(chatId, `⚠️ Chain limit reached (${config.maxToolChain} steps)`);
     }

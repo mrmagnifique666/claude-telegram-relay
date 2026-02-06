@@ -6,12 +6,13 @@
  *
  * Connects Telegram chats to a local Claude Code CLI instance.
  */
-import { config } from "./config/env.js";
+import { config, watchEnv } from "./config/env.js";
 import { setLogLevel, addRedactPattern, log } from "./utils/log.js";
 import { loadBuiltinSkills } from "./skills/loader.js";
 import { processCodeRequests } from "./processors/codequeue.js";
 import { createBot } from "./bot/telegram.js";
 import { startVoiceServer } from "./voice/server.js";
+import { startScheduler, stopScheduler } from "./scheduler/scheduler.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -101,10 +102,12 @@ async function main() {
   // Register cleanup handlers
   process.on("exit", releaseLock);
   process.on("SIGINT", () => {
+    stopScheduler();
     releaseLock();
     process.exit(0);
   });
   process.on("SIGTERM", () => {
+    stopScheduler();
     releaseLock();
     process.exit(0);
   });
@@ -115,8 +118,14 @@ async function main() {
   // Load skills
   await loadBuiltinSkills();
 
+  // Watch .env for hot-reload
+  watchEnv();
+
   // Start voice server (before bot.start() which blocks)
   startVoiceServer();
+
+  // Start scheduler (before bot.start() which blocks)
+  startScheduler(config.voiceChatId, config.voiceUserId);
 
   // Create and start Telegram bot (long polling)
   const bot = createBot();
