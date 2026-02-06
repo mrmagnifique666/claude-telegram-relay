@@ -15,12 +15,10 @@ export function startVoiceServer(): void {
   }
 
   if (!config.deepgramApiKey) {
-    log.warn("[voice] DEEPGRAM_API_KEY not set — voice server will not start");
-    return;
+    log.warn("[voice] DEEPGRAM_API_KEY not set — calls will fail until configured");
   }
   if (!config.elevenlabsApiKey) {
-    log.warn("[voice] ELEVENLABS_API_KEY not set — voice server will not start");
-    return;
+    log.warn("[voice] ELEVENLABS_API_KEY not set — calls will fail until configured");
   }
 
   const server = http.createServer((req, res) => {
@@ -42,11 +40,30 @@ export function startVoiceServer(): void {
     res.end("Not Found");
   });
 
-  const wss = new WebSocketServer({ server, path: "/voice/stream" });
+  // Use noServer mode so WSS doesn't re-emit HTTP server errors
+  const wss = new WebSocketServer({ noServer: true });
 
   wss.on("connection", (ws) => {
     log.info("[voice] New Twilio WebSocket connection");
     handleTwilioStream(ws);
+  });
+
+  server.on("upgrade", (req, socket, head) => {
+    if (req.url === "/voice/stream") {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
+
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      log.error(`[voice] Port ${config.voicePort} already in use — voice server not started`);
+    } else {
+      log.error(`[voice] Server error: ${err.message}`);
+    }
   });
 
   server.listen(config.voicePort, () => {
