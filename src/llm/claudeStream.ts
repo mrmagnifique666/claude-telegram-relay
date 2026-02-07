@@ -111,7 +111,8 @@ export function runClaudeStream(
   chatId: number,
   userMessage: string,
   isAdmin: boolean,
-  callbacks: StreamCallbacks
+  callbacks: StreamCallbacks,
+  modelOverride?: string
 ): StreamHandle {
   const existingSession = getSession(chatId);
   const isResume = !!existingSession;
@@ -125,7 +126,8 @@ export function runClaudeStream(
     prompt = buildFullPrompt(chatId, userMessage, isAdmin);
   }
 
-  const args = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", config.claudeModel];
+  const model = modelOverride || config.claudeModel;
+  const args = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", model];
   if (isResume) {
     args.push("--resume", existingSession);
   }
@@ -191,9 +193,13 @@ export function runClaudeStream(
       }
 
       const resultText = typeof event.result === "string" ? event.result : accumulated;
+      log.info(`[stream] Result received: ${resultText.length} chars, accumulated: ${accumulated.length} chars, event.result type: ${typeof event.result}`);
+      log.debug(`[stream] Result text (first 300): ${resultText.slice(0, 300)}`);
+
       // Check if the result is a tool call
       const toolCall = detectToolCall(resultText);
       if (toolCall) {
+        log.info(`[stream] Detected tool_call: ${toolCall.tool}`);
         callbacks.onComplete({
           text: resultText,
           session_id: sessionId,
@@ -202,6 +208,7 @@ export function runClaudeStream(
           args: toolCall.args,
         });
       } else {
+        log.info(`[stream] Plain text response (no tool call)`);
         callbacks.onComplete({
           text: resultText,
           session_id: sessionId,

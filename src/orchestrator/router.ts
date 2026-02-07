@@ -12,6 +12,7 @@ import { addTurn, logError } from "../storage/store.js";
 import { autoCompact } from "./compaction.js";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
+import { selectModel, getModelId, modelLabel, type ModelTier } from "../llm/modelSelector.js";
 import type { DraftController } from "../bot/draftMessage.js";
 
 /**
@@ -33,16 +34,21 @@ export function setProgressCallback(cb: (chatId: number, message: string) => Pro
 export async function handleMessage(
   chatId: number,
   userMessage: string,
-  userId: number
+  userId: number,
+  contextHint: "user" | "scheduler" = "user"
 ): Promise<string> {
   const userIsAdmin = isAdmin(userId);
+
+  // Select model tier based on message content
+  const tier = selectModel(userMessage, contextHint);
+  const model = getModelId(tier);
 
   // Store user turn
   addTurn(chatId, { role: "user", content: userMessage });
 
   // First pass: Claude
-  log.info(`[router] Sending to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
-  let result = await runClaude(chatId, userMessage, userIsAdmin);
+  log.info(`[router] ${modelLabel(tier)} Sending to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
+  let result = await runClaude(chatId, userMessage, userIsAdmin, model);
   log.info(`[router] Claude responded with type: ${result.type}`);
 
   if (result.type === "message") {
@@ -50,7 +56,8 @@ export async function handleMessage(
     return result.text;
   }
 
-  // Tool chaining loop
+  // Tool chaining loop — use haiku for intermediate routing (cheaper)
+  const followUpModel = getModelId("haiku");
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
 
@@ -112,7 +119,7 @@ export async function handleMessage(
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
-      result = await runClaude(chatId, followUp, userIsAdmin);
+      result = await runClaude(chatId, followUp, userIsAdmin, followUpModel);
       if (result.type === "message") {
         addTurn(chatId, { role: "assistant", content: result.text });
         return result.text;
@@ -132,7 +139,7 @@ export async function handleMessage(
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
-      result = await runClaude(chatId, followUp, userIsAdmin);
+      result = await runClaude(chatId, followUp, userIsAdmin, followUpModel);
       if (result.type === "message") {
         addTurn(chatId, { role: "assistant", content: result.text });
         return result.text;
@@ -155,7 +162,7 @@ export async function handleMessage(
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
-      result = await runClaude(chatId, followUp, userIsAdmin);
+      result = await runClaude(chatId, followUp, userIsAdmin, followUpModel);
       if (result.type === "message") {
         addTurn(chatId, { role: "assistant", content: result.text });
         return result.text;
@@ -176,8 +183,8 @@ export async function handleMessage(
     addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
     addTurn(chatId, { role: "user", content: followUp });
 
-    log.info(`[router] Feeding tool result back to Claude (step ${step + 1})...`);
-    result = await runClaude(chatId, followUp, userIsAdmin);
+    log.info(`[router] Feeding tool result back to Claude (step ${step + 1}, ${modelLabel("haiku")})...`);
+    result = await runClaude(chatId, followUp, userIsAdmin, followUpModel);
     log.info(`[router] Claude follow-up response type: ${result.type}`);
 
     // If Claude responds with a message, we're done
@@ -221,21 +228,28 @@ export async function handleMessageStreaming(
 ): Promise<string> {
   const userIsAdmin = isAdmin(userId);
 
+  // Select model tier based on message content
+  const tier = selectModel(userMessage, "user");
+  const model = getModelId(tier);
+
   addTurn(chatId, { role: "user", content: userMessage });
 
-  log.info(`[router] Streaming to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
+  log.info(`[router] ${modelLabel(tier)} Streaming to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
 
   // First pass: try streaming
-  const streamResult = await runClaudeStreamAsync(chatId, userMessage, userIsAdmin, draft);
+  const streamResult = await runClaudeStreamAsync(chatId, userMessage, userIsAdmin, draft, model);
+  log.info(`[router-stream] Stream completed: is_tool_call=${streamResult.is_tool_call}, text=${streamResult.text.length} chars, tool=${streamResult.tool || "none"}`);
 
   // If it's a plain text response, we're done (draft already has the content)
   if (!streamResult.is_tool_call) {
     addTurn(chatId, { role: "assistant", content: streamResult.text });
     await draft.finalize();
+    log.info(`[router-stream] Returning plain text (${streamResult.text.length} chars)`);
     return streamResult.text;
   }
 
   // It's a tool call — cancel the draft and process the tool chain in batch mode
+  log.info(`[router-stream] Tool call detected: ${streamResult.tool} — switching to batch mode`);
   await draft.cancel();
 
   let result = {
@@ -246,7 +260,8 @@ export async function handleMessageStreaming(
     session_id: streamResult.session_id,
   };
 
-  // Tool chaining loop (batch mode for intermediate steps)
+  // Tool chaining loop (batch mode, haiku for intermediate routing)
+  const streamFollowUpModel = getModelId("haiku");
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
 
@@ -283,7 +298,7 @@ export async function handleMessageStreaming(
       const followUp = `[Tool "${tool}" error]:\nUnknown tool "${tool}".`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
-      const batchResult = await runClaude(chatId, followUp, userIsAdmin);
+      const batchResult = await runClaude(chatId, followUp, userIsAdmin, streamFollowUpModel);
       if (batchResult.type === "message") {
         addTurn(chatId, { role: "assistant", content: batchResult.text });
         return batchResult.text;
@@ -297,7 +312,7 @@ export async function handleMessageStreaming(
       const followUp = `[Tool "${tool}" error]:\nArgument error: ${validationError}.`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
-      const batchResult = await runClaude(chatId, followUp, userIsAdmin);
+      const batchResult = await runClaude(chatId, followUp, userIsAdmin, streamFollowUpModel);
       if (batchResult.type === "message") {
         addTurn(chatId, { role: "assistant", content: batchResult.text });
         return batchResult.text;
@@ -315,7 +330,7 @@ export async function handleMessageStreaming(
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
-      const batchResult = await runClaude(chatId, followUp, userIsAdmin);
+      const batchResult = await runClaude(chatId, followUp, userIsAdmin, streamFollowUpModel);
       if (batchResult.type === "message") {
         addTurn(chatId, { role: "assistant", content: batchResult.text });
         return batchResult.text;
@@ -334,7 +349,7 @@ export async function handleMessageStreaming(
     addTurn(chatId, { role: "user", content: followUp });
 
     // For the final step (or if this is the last tool), try streaming the response
-    const batchResult = await runClaude(chatId, followUp, userIsAdmin);
+    const batchResult = await runClaude(chatId, followUp, userIsAdmin, streamFollowUpModel);
     if (batchResult.type === "message") {
       addTurn(chatId, { role: "assistant", content: batchResult.text });
       return batchResult.text;
@@ -358,7 +373,8 @@ function runClaudeStreamAsync(
   chatId: number,
   userMessage: string,
   isAdminUser: boolean,
-  draft: DraftController
+  draft: DraftController,
+  modelOverride?: string
 ): Promise<StreamResult> {
   return new Promise<StreamResult>((resolve, reject) => {
     runClaudeStream(chatId, userMessage, isAdminUser, {
@@ -374,7 +390,7 @@ function runClaudeStreamAsync(
       onError(error: Error) {
         reject(error);
       },
-    });
+    }, modelOverride);
   });
 }
 

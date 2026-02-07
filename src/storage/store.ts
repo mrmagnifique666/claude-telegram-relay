@@ -124,7 +124,7 @@ export function clearSession(chatId: number): void {
 
 // --- Admin sessions (persistent across restarts) ---
 
-const ADMIN_EXPIRY_SECONDS = 24 * 60 * 60; // 24 hours
+const ADMIN_EXPIRY_SECONDS = 7 * 24 * 60 * 60; // 7 days
 
 export function saveAdminSession(userId: number): void {
   const d = getDb();

@@ -133,7 +133,8 @@ function buildFullPrompt(
 export async function runClaude(
   chatId: number,
   userMessage: string,
-  isAdmin: boolean = false
+  isAdmin: boolean = false,
+  modelOverride?: string
 ): Promise<ParsedResult> {
   const existingSession = getSession(chatId);
   const isResume = !!existingSession;
@@ -152,7 +153,8 @@ export async function runClaude(
   log.debug(`Claude prompt length: ${prompt.length} (resume: ${isResume})`);
 
   return new Promise<ParsedResult>((resolve) => {
-    const args = ["-p", "-", "--output-format", "json", "--model", config.claudeModel];
+    const model = modelOverride || config.claudeModel;
+    const args = ["-p", "-", "--output-format", "json", "--model", model];
 
     if (isResume) {
       args.push("--resume", existingSession);
