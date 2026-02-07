@@ -305,10 +305,30 @@ export function createBot(): Bot {
         if (config.streamingEnabled) {
           const draft = createDraftController(bot, chatId);
           const response = await handleMessageStreaming(chatId, messageWithMeta, userId, draft);
+          const draftMsgId = draft.getMessageId();
+          log.info(`[telegram] Streaming done: response=${response.length} chars, draftMsgId=${draftMsgId}`);
           // Draft controller already sent/edited the message if streaming worked.
           // If draft has no message (e.g. tool call path), send the response normally.
-          if (!draft.getMessageId()) {
-            await sendLong(ctx, response);
+          if (!draftMsgId) {
+            if (!response || response.trim().length === 0) {
+              log.warn(`[telegram] Empty response from streaming — sending fallback`);
+              await bot.api.sendMessage(chatId, "Message reçu et traité.");
+            } else {
+              log.info(`[telegram] Sending response via bot.api.sendMessage (${response.length} chars)...`);
+              try {
+                await sendFormatted(
+                  (chunk, parseMode) => bot.api.sendMessage(chatId, chunk, parseMode ? { parse_mode: parseMode as any } : undefined),
+                  response
+                );
+                log.info(`[telegram] Response sent successfully`);
+              } catch (sendErr) {
+                log.error(`[telegram] sendFormatted failed: ${sendErr}`);
+                // Last resort — send plain text directly
+                const plain = response.slice(0, 4000);
+                await bot.api.sendMessage(chatId, plain);
+                log.info(`[telegram] Sent plain fallback`);
+              }
+            }
           }
         } else {
           const response = await handleMessage(chatId, messageWithMeta, userId);
