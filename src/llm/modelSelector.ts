@@ -39,12 +39,14 @@ export function selectModel(
     return "haiku";
   }
 
+  // Agent tasks — default haiku, sonnet for synthesis/deep analysis
+  if (message.startsWith("[AGENT:")) {
+    if (/weekly.*deep.*dive|alpha.*report|proactive.*fix|effectiveness.*review/i.test(message)) return "sonnet";
+    return "haiku";
+  }
+
   // Scheduler events
   if (context === "scheduler" || message.startsWith("[SCHEDULER]") || message.startsWith("[HEARTBEAT")) {
-    // Weekly self-review, alpha report → opus (quality reports)
-    if (/self.review|alpha.report|weekly/i.test(message)) return "opus";
-    // Heartbeat proactive actions → sonnet (needs reasoning)
-    if (/HEARTBEAT PROACTIF/i.test(message)) return "sonnet";
     // Heartbeat checks, stability, digests → haiku (simple checks)
     if (/heartbeat|stability|digest/i.test(message)) return "haiku";
     // Briefings → sonnet

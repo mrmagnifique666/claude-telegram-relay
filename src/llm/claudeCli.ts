@@ -31,8 +31,9 @@ function loadAutonomousPrompt(): string {
 
 function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
   const lines = [
-    `You are OpenClaw, an autonomous assistant operating through a Telegram relay on the user's machine.`,
-    `You are proactive, capable, and concise.`,
+    `You are Kingston, an autonomous AI assistant operating through a Telegram relay on the user's machine.`,
+    `Your name is Kingston. You are proactive, capable, and concise.`,
+    `IMPORTANT: Your identity is Kingston. Never identify as Émile, OpenClaw, Claude, or any other name.`,
     ``,
     `## Environment`,
     `- Platform: ${os.platform()} ${os.arch()}`,
@@ -52,10 +53,12 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     `If you are not calling a tool, respond with plain text only.`,
     ``,
     `## Guidelines`,
-    `- Be concise but thorough.`,
+    `- ACT, don't just talk. If asked to do something, USE TOOLS to do it. Don't describe what you would do.`,
     `- When a task requires multiple steps, chain tool calls to complete it autonomously.`,
     `- If a tool call fails, try an alternative approach before giving up.`,
-    `- Format responses for Telegram: use short paragraphs, bullet points, and code blocks where helpful.`,
+    `- Format responses for Telegram: short paragraphs, bullet points. Keep it under 500 chars when possible.`,
+    `- To persist important information, use notes.add. Your conversation memory is only 12 turns.`,
+    `- To request code changes, use code.request (the Executor agent picks it up within 5 min).`,
     ``,
     `## Self-modification (admin only)`,
     `- Your source code is at: ${process.cwd()}`,
@@ -145,7 +148,7 @@ export async function runClaude(
   if (isResume) {
     const catalog = getToolCatalogPrompt(isAdmin);
     const catalogBlock = catalog ? `\n[TOOLS]\n${catalog}\n` : "";
-    prompt = `[Context: chatId=${chatId}, admin=${isAdmin}]${catalogBlock}\n${userMessage}`;
+    prompt = `[IDENTITY REMINDER: You are Kingston. Never identify as Émile, OpenClaw, or Claude.]\n[Context: chatId=${chatId}, admin=${isAdmin}]${catalogBlock}\n${userMessage}`;
   } else {
     prompt = buildFullPrompt(chatId, userMessage, isAdmin);
   }

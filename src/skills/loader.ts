@@ -90,6 +90,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/notes.js");
   await import("./builtin/files.js");
   await import("./builtin/filewrite.js");
+  await import("./builtin/files-advanced.js");
   await import("./builtin/shell.js");
   await import("./builtin/web.js");
   await import("./builtin/system.js");
@@ -133,6 +134,9 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/experiment.js");
   await import("./builtin/optimize.js");
   await import("./builtin/learn.js");
+  await import("./builtin/agents.js");
+  await import("./builtin/git.js");
+  await import("./builtin/memory-ops.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
   log.info(`Loaded ${registry.size} built-in skills.`);

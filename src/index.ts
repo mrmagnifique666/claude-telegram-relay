@@ -13,7 +13,9 @@ import { processCodeRequests } from "./processors/codequeue.js";
 import { createBot } from "./bot/telegram.js";
 import { startVoiceServer } from "./voice/server.js";
 import { startScheduler, stopScheduler } from "./scheduler/scheduler.js";
+import { startAgents, shutdownAgents } from "./agents/startup.js";
 import { cleanupDatabase } from "./storage/store.js";
+import { startDashboard } from "./dashboard/server.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -103,11 +105,13 @@ async function main() {
   // Register cleanup handlers
   process.on("exit", releaseLock);
   process.on("SIGINT", () => {
+    shutdownAgents();
     stopScheduler();
     releaseLock();
     process.exit(0);
   });
   process.on("SIGTERM", () => {
+    shutdownAgents();
     stopScheduler();
     releaseLock();
     process.exit(0);
@@ -130,6 +134,12 @@ async function main() {
 
   // Start scheduler (before bot.start() which blocks)
   startScheduler(config.voiceChatId, config.voiceUserId);
+
+  // Start autonomous agents
+  startAgents();
+
+  // Start local dashboard UI
+  startDashboard();
 
   // Create and start Telegram bot (long polling)
   const bot = createBot();

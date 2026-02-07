@@ -287,6 +287,115 @@ registerSkill({
   },
 });
 
+// ── moltbook.my_posts ──
+
+registerSkill({
+  name: "moltbook.my_posts",
+  description: "List MY posts (authored by Kingston). Use to verify what actually exists.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      limit: { type: "number", description: "Number of posts (default 10, max 50)" },
+    },
+  },
+  async execute(args) {
+    const limit = Math.min(Number(args.limit) || 10, 50);
+    const r = await api("GET", `/agents/me/posts?limit=${limit}`);
+    if (!r.ok) return formatError(r);
+
+    const posts = Array.isArray(r.data) ? r.data : r.raw?.posts || r.data?.posts || [];
+    if (posts.length === 0) return "No posts found.";
+
+    return posts
+      .map((p: any, i: number) => {
+        const score = p.score !== undefined ? ` [${p.score}↑]` : "";
+        const comments = p.comment_count !== undefined ? ` (${p.comment_count} comments)` : "";
+        const sub = typeof p.submolt === "object" ? p.submolt?.name : p.submolt;
+        const date = p.created_at ? new Date(p.created_at).toLocaleDateString("fr-CA") : "";
+        return `${i + 1}. ${p.title}${score}${comments}\n   s/${sub || "?"} — ${date} — ID: ${p.id}`;
+      })
+      .join("\n\n");
+  },
+});
+
+// ── moltbook.my_comments ──
+
+registerSkill({
+  name: "moltbook.my_comments",
+  description: "List MY comments (authored by Kingston). Use to verify engagement history.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      limit: { type: "number", description: "Number of comments (default 10, max 50)" },
+    },
+  },
+  async execute(args) {
+    const limit = Math.min(Number(args.limit) || 10, 50);
+    const r = await api("GET", `/agents/me/comments?limit=${limit}`);
+    if (!r.ok) return formatError(r);
+
+    const comments = Array.isArray(r.data) ? r.data : r.raw?.comments || r.data?.comments || [];
+    if (comments.length === 0) return "No comments found.";
+
+    return comments
+      .map((c: any, i: number) => {
+        const score = c.score !== undefined ? ` [${c.score}↑]` : "";
+        const preview = c.content?.length > 100 ? c.content.slice(0, 100) + "..." : c.content;
+        const date = c.created_at ? new Date(c.created_at).toLocaleDateString("fr-CA") : "";
+        return `${i + 1}. ${preview}${score}\n   post: ${c.post_id || "?"} — ${date} — ID: ${c.id}`;
+      })
+      .join("\n\n");
+  },
+});
+
+// ── moltbook.post_details ──
+
+registerSkill({
+  name: "moltbook.post_details",
+  description: "Get full post details with all comments. Use to see replies received.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      postId: { type: "string", description: "Post ID to get details for" },
+    },
+    required: ["postId"],
+  },
+  async execute(args) {
+    const postId = encodeURIComponent(args.postId as string);
+    const r = await api("GET", `/posts/${postId}`);
+    if (!r.ok) return formatError(r);
+
+    const post = r.data;
+    const by = typeof post.author === "object" ? post.author?.name : post.author || "?";
+    const sub = typeof post.submolt === "object" ? post.submolt?.name : post.submolt;
+    const score = post.score !== undefined ? ` [${post.score}↑]` : "";
+
+    const lines = [
+      `Title: ${post.title}${score}`,
+      `By: ${by} in s/${sub || "?"}`,
+      post.content ? `\n${post.content}` : post.url ? `Link: ${post.url}` : "",
+    ];
+
+    const comments = post.comments || r.raw?.comments || [];
+    if (comments.length > 0) {
+      lines.push(`\n--- ${comments.length} comment(s) ---`);
+      for (const c of comments) {
+        const cBy = typeof c.author === "object" ? c.author?.name : c.author || "?";
+        const cScore = c.score !== undefined ? ` [${c.score}↑]` : "";
+        const indent = c.parent_id ? "  ↳ " : "";
+        lines.push(`${indent}${cBy}${cScore}: ${c.content}`);
+      }
+    } else {
+      lines.push("\nNo comments yet.");
+    }
+
+    return lines.filter(Boolean).join("\n");
+  },
+});
+
 // ── moltbook.submolts ──
 
 registerSkill({

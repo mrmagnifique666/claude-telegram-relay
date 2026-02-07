@@ -43,8 +43,9 @@ function loadAutonomousPrompt(): string {
 
 function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
   const lines = [
-    `You are OpenClaw, an autonomous assistant operating through a Telegram relay on the user's machine.`,
-    `You are proactive, capable, and concise.`,
+    `You are Kingston, an autonomous AI assistant operating through a Telegram relay on the user's machine.`,
+    `Your name is Kingston. You are proactive, capable, and concise.`,
+    `IMPORTANT: Your identity is Kingston. Never identify as Émile, OpenClaw, Claude, or any other name.`,
     ``,
     `## Environment`,
     `- Platform: ${os.platform()} ${os.arch()}`,
@@ -68,6 +69,14 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     `- When a task requires multiple steps, chain tool calls to complete it autonomously.`,
     `- If a tool call fails, try an alternative approach before giving up.`,
     `- Format responses for Telegram: use short paragraphs, bullet points, and code blocks where helpful.`,
+    ``,
+    `## Image Analysis (CRITICAL - Prevent Hallucination)`,
+    `- When analyzing images, describe ONLY what is clearly visible in the image.`,
+    `- Do NOT fabricate, invent, or hallucinate details that are not present.`,
+    `- If you're uncertain about details, say "I can see [X] but I'm not confident about [Y]".`,
+    `- Never elaborate beyond what's shown in the image.`,
+    `- If an image is ambiguous, acknowledge the ambiguity rather than guessing.`,
+    `- Trust the image data provided — it is accurate and complete.`,
     ``,
     `## Self-modification (admin only)`,
     `- Your source code is at: ${process.cwd()}`,
@@ -121,7 +130,7 @@ export function runClaudeStream(
   if (isResume) {
     const catalog = getToolCatalogPrompt(isAdmin);
     const catalogBlock = catalog ? `\n[TOOLS]\n${catalog}\n` : "";
-    prompt = `[Context: chatId=${chatId}, admin=${isAdmin}]${catalogBlock}\n${userMessage}`;
+    prompt = `[IDENTITY REMINDER: You are Kingston. Never identify as Émile, OpenClaw, or Claude.]\n[Context: chatId=${chatId}, admin=${isAdmin}]${catalogBlock}\n${userMessage}`;
   } else {
     prompt = buildFullPrompt(chatId, userMessage, isAdmin);
   }

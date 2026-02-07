@@ -27,9 +27,8 @@ const EVENTS: ScheduledEvent[] = [
   {
     key: "morning_briefing",
     type: "daily",
-    hour: 8,
-    prompt:
-      "[SCHEDULER] Briefing matinal. Donne un résumé de la journée : rappels en attente, notes récentes, et un mot d'encouragement. Sois concis.",
+    hour: 7,
+    prompt: null, // dynamic — built at fire time with overnight agent data
   },
   {
     key: "evening_checkin",
@@ -62,18 +61,6 @@ const EVENTS: ScheduledEvent[] = [
     hour: 15,
     prompt: null, // dynamic — built at fire time
   },
-  {
-    key: "daily_alpha_report",
-    type: "daily",
-    hour: 8,
-    prompt: null, // dynamic — built at fire time via market.report skill
-  },
-  {
-    key: "weekly_self_review",
-    type: "daily",
-    hour: 23,
-    prompt: null, // dynamic — fires Sunday only, built at fire time
-  },
 ];
 
 const CODE_REQUESTS_FILE = path.join(process.cwd(), "code-requests.json");
@@ -105,6 +92,77 @@ function buildCodeDigestPrompt(): string | null {
     log.error(`[scheduler] Error building code digest: ${err}`);
     return null;
   }
+}
+
+/**
+ * Build morning briefing with overnight agent activity report.
+ * Queries agent_runs table for runs since last evening (20h previous day).
+ */
+function buildMorningBriefingPrompt(): string {
+  let agentSummary = "";
+  try {
+    const db = getDb();
+    // Get runs from the last 12 hours (overnight)
+    const cutoff = Math.floor(Date.now() / 1000) - 12 * 3600;
+    const runs = db
+      .prepare(
+        `SELECT agent_id, cycle, outcome, duration_ms, error_msg, started_at
+         FROM agent_runs WHERE started_at > ? ORDER BY started_at ASC`
+      )
+      .all(cutoff) as Array<{
+        agent_id: string;
+        cycle: number;
+        outcome: string;
+        duration_ms: number;
+        error_msg: string | null;
+        started_at: number;
+      }>;
+
+    if (runs.length > 0) {
+      const byAgent: Record<string, { success: number; error: number; rateLimit: number; totalMs: number }> = {};
+      for (const r of runs) {
+        if (!byAgent[r.agent_id]) byAgent[r.agent_id] = { success: 0, error: 0, rateLimit: 0, totalMs: 0 };
+        const a = byAgent[r.agent_id];
+        if (r.outcome === "success") a.success++;
+        else if (r.outcome === "rate_limit") a.rateLimit++;
+        else a.error++;
+        a.totalMs += r.duration_ms;
+      }
+
+      const lines: string[] = [];
+      for (const [id, stats] of Object.entries(byAgent)) {
+        lines.push(
+          `- **${id}**: ${stats.success} succès, ${stats.error} erreurs, ${stats.rateLimit} rate limits, ${Math.round(stats.totalMs / 1000)}s total`
+        );
+      }
+      agentSummary = `\n\n**Activité agents (dernières 12h):**\n${lines.join("\n")}`;
+    }
+
+    // Get current agent states
+    const states = db
+      .prepare("SELECT agent_id, cycle, total_runs, consecutive_errors FROM agent_state")
+      .all() as Array<{ agent_id: string; cycle: number; total_runs: number; consecutive_errors: number }>;
+
+    if (states.length > 0) {
+      const stateLines = states.map(
+        (s) => `- ${s.agent_id}: cycle ${s.cycle}, ${s.total_runs} runs total, ${s.consecutive_errors} erreurs consécutives`
+      );
+      agentSummary += `\n\n**État actuel agents:**\n${stateLines.join("\n")}`;
+    }
+  } catch (err) {
+    log.debug(`[scheduler] Failed to build agent summary: ${err}`);
+  }
+
+  return (
+    `[SCHEDULER] Briefing matinal (7h). Donne un résumé de la journée à Nicolas :\n` +
+    `1. Rappels en attente (utilise scheduler.list)\n` +
+    `2. Notes récentes (utilise notes.list)\n` +
+    `3. Rapport des agents de la nuit ci-dessous\n` +
+    `4. Un mot d'encouragement\n` +
+    `${agentSummary}\n\n` +
+    `Compile tout ça en un message concis et envoie via telegram.send. ` +
+    `Mentionne les succès et problèmes des agents. Sois positif mais honnête.`
+  );
 }
 
 /**
@@ -220,86 +278,6 @@ let consecutiveSilentHeartbeats = 0;
 const SILENCE_STREAK_THRESHOLD = 10; // ~5 hours of stability
 let silenceStreakNotified = false;
 
-// Proactive heartbeat counter (rotation)
-let heartbeatCycleCounter = 0;
-
-/**
- * Proactive Value Engine — generates business actions on each heartbeat.
- * Rotation: counter % 5 determines which actions to run.
- * Only runs if HEARTBEAT_PROACTIVE_MODE=true in .env.
- */
-function buildProactivePrompt(): string | null {
-  if (process.env.HEARTBEAT_PROACTIVE_MODE !== "true") return null;
-
-  const cycle = heartbeatCycleCounter % 5;
-  heartbeatCycleCounter++;
-
-  const actions: Record<number, string> = {
-    0: // LinkedIn Prospecting + Twitter Engagement
-      `[HEARTBEAT PROACTIF] Cycle ${heartbeatCycleCounter} — LinkedIn Prospecting + Twitter\n\n` +
-      `**Action 1: LinkedIn Prospecting**\n` +
-      `- Si linkedin configuré: utilise linkedin.search pour trouver des courtiers/brokers dans la région Gatineau/Ottawa\n` +
-      `- Sinon: utilise web.search pour "courtier immobilier Gatineau" ou "insurance broker Ottawa"\n` +
-      `- Sauvegarde 2-3 prospects trouvés via contacts.add avec tags "prospect,linkedin,broker"\n` +
-      `- Log l'action via analytics.log(skill='proactive.linkedin', outcome='success')\n\n` +
-      `**Action 2: Twitter Engagement**\n` +
-      `- Si twitter configuré: twitter.search "real estate leads" ou "broker tips", like 2-3 tweets\n` +
-      `- Sinon: skip et log analytics.log(skill='proactive.twitter', outcome='skipped', errorMsg='not configured')\n\n` +
-      `Résume brièvement les actions prises via telegram.send. Sois concis (2-3 lignes max).`,
-
-    1: // Client Health Check + Performance Logging
-      `[HEARTBEAT PROACTIF] Cycle ${heartbeatCycleCounter} — Client Health + Performance\n\n` +
-      `**Action 1: Client Health Check**\n` +
-      `- Utilise contacts.list avec tag "client" pour voir les clients existants\n` +
-      `- Identifie ceux sans interaction récente (regarde updated_at)\n` +
-      `- Si un client n'a pas été contacté depuis >7 jours, note-le\n` +
-      `- Crée un brouillon gmail.draft si gmail est configuré pour relancer\n\n` +
-      `**Action 2: Performance Logging**\n` +
-      `- Utilise analytics.report avec timeframe='today' pour un snapshot\n` +
-      `- Log cette exécution de heartbeat via analytics.log\n\n` +
-      `Résume via telegram.send. Max 3 lignes.`,
-
-    2: // Reddit Mining + Automated Follow-ups
-      `[HEARTBEAT PROACTIF] Cycle ${heartbeatCycleCounter} — Reddit Mining + Follow-ups\n\n` +
-      `**Action 1: Reddit Pain Point Mining**\n` +
-      `- Si reddit configuré: reddit.search "lead generation" dans r/realestate, limit=5\n` +
-      `- Sinon: utilise web.search pour "site:reddit.com real estate lead generation"\n` +
-      `- Identifie 1-2 posts avec des pain points pertinents\n` +
-      `- Sauvegarde dans notes.add avec tag "reddit-prospect"\n\n` +
-      `**Action 2: Follow-ups**\n` +
-      `- contacts.search avec tag "prospect" pour voir les prospects récents\n` +
-      `- Identifie ceux ajoutés il y a >3 jours sans follow-up\n` +
-      `- Suggère une action de relance à Nicolas\n\n` +
-      `Résume via telegram.send. Max 3 lignes.`,
-
-    3: // Competitive Intel + LinkedIn Content
-      `[HEARTBEAT PROACTIF] Cycle ${heartbeatCycleCounter} — Veille concurrentielle + Contenu\n\n` +
-      `**Action 1: Competitive Intelligence**\n` +
-      `- web.search "AI answering service real estate 2026" ou "AI assistant broker"\n` +
-      `- Identifie 1-2 concurrents ou tendances intéressantes\n` +
-      `- Sauvegarde un résumé dans notes.add avec tag "veille-concurrentielle"\n\n` +
-      `**Action 2: Content Draft**\n` +
-      `- Rédige un court snippet LinkedIn (150-200 chars) sur un sujet rotatif:\n` +
-      `  Tips broker, tendances marché, automatisation IA, success stories\n` +
-      `- Sauvegarde dans notes.add avec tag "content-draft-linkedin"\n` +
-      `- Ne publie PAS — Nicolas approuve d'abord\n\n` +
-      `Résume via telegram.send. Max 3 lignes.`,
-
-    4: // Skill Audit + Moltbook Engagement
-      `[HEARTBEAT PROACTIF] Cycle ${heartbeatCycleCounter} — Audit skills + Moltbook\n\n` +
-      `**Action 1: Skill Utilization Audit**\n` +
-      `- Utilise analytics.bottlenecks pour identifier les skills lents\n` +
-      `- Si un skill est >5s en moyenne, utilise optimize.suggest dessus\n` +
-      `- Log le résultat via analytics.log\n\n` +
-      `**Action 2: Moltbook Quick Engagement**\n` +
-      `- moltbook.feed sort=hot limit=3 pour voir les posts tendance\n` +
-      `- Si un post est pertinent, moltbook.upvote\n` +
-      `- Si un post mérite un commentaire constructif, moltbook.comment\n\n` +
-      `Résume via telegram.send. Max 3 lignes.`,
-  };
-
-  return actions[cycle] || null;
-}
 
 function ensureTables(): void {
   const db = getDb();
@@ -354,45 +332,14 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
   const nowEpoch = Math.floor(Date.now() / 1000);
   setLastRun(event.key, nowEpoch);
 
-  // Weekly self-review — Sunday 11 PM only
-  if (event.key === "weekly_self_review") {
-    const dayOfWeek = new Date().toLocaleDateString("en-CA", { timeZone: TZ, weekday: "long" });
-    if (dayOfWeek !== "Sunday") {
-      log.debug(`[scheduler] weekly_self_review: skipping (${dayOfWeek}, not Sunday)`);
-      return;
-    }
-    log.info(`[scheduler] Firing Weekly Self-Review`);
+  // Morning briefing with overnight agent report
+  if (event.key === "morning_briefing") {
+    log.info(`[scheduler] Firing morning briefing with overnight agent report`);
     try {
-      const prompt =
-        `[SCHEDULER] Weekly Self-Review — C'est dimanche soir, temps de faire le bilan.\n\n` +
-        `1. Utilise analytics.report avec timeframe='week' pour obtenir les stats de la semaine\n` +
-        `2. Utilise learn.preferences pour voir les patterns appris\n` +
-        `3. Utilise optimize.analyze sur les skills les plus utilisés\n` +
-        `4. Génère un rapport format:\n` +
-        `   📊 WEEKLY SELF-REVIEW\n` +
-        `   ✅ WINS (ce qui a bien fonctionné)\n` +
-        `   ⚠️ AMÉLIORATIONS (ce qui peut être mieux)\n` +
-        `   🚀 PLAN (actions prévues)\n` +
-        `   CONFIANCE: X/10\n` +
-        `5. Envoie le rapport à Nicolas via telegram.send`;
+      const prompt = buildMorningBriefingPrompt();
       await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
     } catch (err) {
-      log.error(`[scheduler] Weekly Self-Review error: ${err}`);
-    }
-    return;
-  }
-
-  // Daily Alpha Report — market analysis before market open
-  if (event.key === "daily_alpha_report") {
-    log.info(`[scheduler] Firing Daily Alpha Report`);
-    try {
-      const prompt =
-        `[SCHEDULER] Daily Alpha Report — C'est l'heure du briefing marché pré-ouverture. ` +
-        `Utilise le skill market.report pour générer le rapport complet et l'envoyer à Nicolas via telegram.send. ` +
-        `Si le marché est fermé (weekend), envoie un bref message disant que le marché est fermé aujourd'hui.`;
-      await handleMessage(schedulerChatId, prompt, schedulerUserId, "scheduler");
-    } catch (err) {
-      log.error(`[scheduler] Daily Alpha Report error: ${err}`);
+      log.error(`[scheduler] Morning briefing error: ${err}`);
     }
     return;
   }
@@ -450,17 +397,6 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
             `${consecutiveSilentHeartbeats} heartbeats consécutifs sans alertes. ` +
             `Envoie un bref message de stabilité à Nicolas via telegram.send — pas d'urgence, juste un signal de confiance.`;
           await handleMessage(schedulerChatId, stabilityMsg, schedulerUserId, "scheduler");
-        }
-      }
-
-      // Proactive Value Engine — fire business actions after regular alert handling
-      const proactivePrompt = buildProactivePrompt();
-      if (proactivePrompt) {
-        log.info(`[scheduler] Heartbeat proactive cycle ${heartbeatCycleCounter} — firing actions`);
-        try {
-          await handleMessage(schedulerChatId, proactivePrompt, schedulerUserId, "scheduler");
-        } catch (proactiveErr) {
-          log.error(`[scheduler] Heartbeat proactive error: ${proactiveErr}`);
         }
       }
     } catch (err) {

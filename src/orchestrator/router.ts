@@ -100,7 +100,7 @@ export async function handleMessage(
       const msg = tool
         ? `Tool "${tool}" is not permitted${getSkill(tool)?.adminOnly ? " (admin only)" : ""}.`
         : "Tool not permitted.";
-      if (progressCallback) {
+      if (progressCallback && chatId > 1000) {
         await progressCallback(chatId, `❌ ${msg}`);
       }
       addTurn(chatId, { role: "assistant", content: msg });
@@ -112,8 +112,8 @@ export async function handleMessage(
     if (!skill) {
       const errorMsg = `Error: Unknown tool "${tool}". Check the tool catalog and try again.`;
       log.warn(`[router] ${errorMsg}`);
-      logError(errorMsg, "router:unknown_tool");
-      if (progressCallback) {
+      logError(errorMsg, "router:unknown_tool", tool);
+      if (progressCallback && chatId > 1000) {
         await progressCallback(chatId, `❌ Unknown tool: ${tool}`);
       }
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
@@ -132,8 +132,8 @@ export async function handleMessage(
     if (validationError) {
       const errorMsg = `Tool "${tool}" argument error: ${validationError}. Fix the arguments and try again.`;
       log.warn(`[router] ${errorMsg}`);
-      logError(errorMsg, "router:validation");
-      if (progressCallback) {
+      logError(errorMsg, "router:validation", tool);
+      if (progressCallback && chatId > 1000) {
         await progressCallback(chatId, `❌ Arg error on ${tool}`);
       }
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
@@ -155,8 +155,8 @@ export async function handleMessage(
     } catch (err) {
       const errorMsg = `Tool "${tool}" execution failed: ${err instanceof Error ? err.message : String(err)}`;
       log.error(errorMsg);
-      logError(err instanceof Error ? err : errorMsg, `router:exec:${tool}`);
-      if (progressCallback) {
+      logError(err instanceof Error ? err : errorMsg, `router:exec:${tool}`, tool);
+      if (progressCallback && chatId > 1000) {
         await progressCallback(chatId, `❌ ${tool} failed`);
       }
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
@@ -172,8 +172,8 @@ export async function handleMessage(
 
     log.debug(`Tool result (${tool}):`, toolResult.slice(0, 200));
 
-    // Heartbeat: send intermediate progress to Telegram
-    if (progressCallback) {
+    // Heartbeat: send intermediate progress to Telegram (skip dashboard/agent chatIds)
+    if (progressCallback && chatId > 1000) {
       const preview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
       await progressCallback(chatId, `⚙️ **${tool}**\n\`\`\`\n${preview}\n\`\`\``);
     }
@@ -201,7 +201,7 @@ export async function handleMessage(
   if (result.type === "tool_call") {
     const msg = `Reached tool chain limit (${config.maxToolChain} steps). Last pending tool: ${result.tool}.`;
     logError(msg, "router:chain_limit");
-    if (progressCallback) {
+    if (progressCallback && chatId > 1000) {
       await progressCallback(chatId, `⚠️ Chain limit reached (${config.maxToolChain} steps)`);
     }
     addTurn(chatId, { role: "assistant", content: msg });
@@ -339,7 +339,7 @@ export async function handleMessageStreaming(
       continue;
     }
 
-    if (progressCallback) {
+    if (progressCallback && chatId > 1000) {
       const preview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
       await progressCallback(chatId, `⚙️ **${tool}**\n\`\`\`\n${preview}\n\`\`\``);
     }

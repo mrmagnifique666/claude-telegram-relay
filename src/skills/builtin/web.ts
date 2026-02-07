@@ -49,6 +49,22 @@ registerSkill({
       return "Error: only HTTP/HTTPS URLs are allowed.";
     }
 
+    // SSRF protection: block private/internal IPs
+    const hostname = parsed.hostname;
+    if (
+      hostname === "localhost" ||
+      hostname === "0.0.0.0" ||
+      hostname.startsWith("127.") ||
+      hostname.startsWith("10.") ||
+      hostname.startsWith("192.168.") ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+      hostname === "[::1]" ||
+      hostname.endsWith(".local") ||
+      hostname.endsWith(".internal")
+    ) {
+      return "Error: cannot fetch private/internal network addresses.";
+    }
+
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15000);

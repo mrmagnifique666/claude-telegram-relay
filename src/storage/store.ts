@@ -52,9 +52,55 @@ export function getDb(): Database.Database {
         error_message TEXT NOT NULL,
         stack TEXT,
         context TEXT,
+        tool_name TEXT,
+        pattern_key TEXT,
+        resolution_type TEXT,
         resolved INTEGER NOT NULL DEFAULT 0
       );
+      CREATE INDEX IF NOT EXISTS idx_error_resolved ON error_log(resolved, timestamp DESC);
+
+      CREATE TABLE IF NOT EXISTS agent_state (
+        agent_id TEXT PRIMARY KEY,
+        cycle INTEGER NOT NULL DEFAULT 0,
+        total_runs INTEGER NOT NULL DEFAULT 0,
+        last_run_at INTEGER,
+        last_error TEXT,
+        consecutive_errors INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id TEXT NOT NULL,
+        cycle INTEGER NOT NULL,
+        started_at INTEGER NOT NULL,
+        duration_ms INTEGER,
+        outcome TEXT NOT NULL DEFAULT 'success',
+        error_msg TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_agent ON agent_runs(agent_id, started_at DESC);
     `);
+    // Migrate: add new columns to error_log if missing
+    try {
+      const cols = db.prepare("PRAGMA table_info(error_log)").all() as Array<{ name: string }>;
+      const colNames = new Set(cols.map((c) => c.name));
+      if (!colNames.has("tool_name")) {
+        db.exec("ALTER TABLE error_log ADD COLUMN tool_name TEXT");
+      }
+      if (!colNames.has("pattern_key")) {
+        db.exec("ALTER TABLE error_log ADD COLUMN pattern_key TEXT");
+      }
+      if (!colNames.has("resolution_type")) {
+        db.exec("ALTER TABLE error_log ADD COLUMN resolution_type TEXT");
+      }
+    } catch { /* columns may already exist */ }
+
+    // Create indexes for new columns (safe to run after migration)
+    try {
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_error_tool ON error_log(tool_name)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_error_pattern ON error_log(pattern_key)`);
+    } catch { /* indexes may already exist */ }
+
     log.info(`SQLite store initialised at ${dbPath}`);
   }
   return db;
@@ -171,22 +217,69 @@ export interface ErrorLogRow {
   resolved: number;
 }
 
-export function logError(error: Error | string, context?: string): number {
+export function logError(error: Error | string, context?: string, toolName?: string): number {
   const d = getDb();
   const message = error instanceof Error ? error.message : error;
   const stack = error instanceof Error ? error.stack ?? null : null;
-  const info = d
-    .prepare("INSERT INTO error_log (error_message, stack, context) VALUES (?, ?, ?)")
-    .run(message, stack, context ?? null);
-  log.debug(`[error_log] Recorded error #${info.lastInsertRowid}: ${message.slice(0, 80)}`);
 
-  // Feed into MISS/FIX auto-graduation system
+  // Feed into MISS/FIX auto-graduation system and get the pattern key
+  let patternKey: string | null = null;
   try {
     const { recordErrorPattern } = require("../memory/self-review.js");
-    recordErrorPattern(context || "unknown", message);
+    recordErrorPattern(context || "unknown", message, toolName);
+    // Derive pattern key for linking
+    const tokens = message
+      .toLowerCase()
+      .replace(/["'`]/g, "")
+      .replace(/[^a-z0-9_.\s]/g, " ")
+      .split(/\s+/)
+      .filter((w: string) => w.length > 2)
+      .map((w: string) => w.replace(/\d+/g, "N"))
+      .slice(0, 5)
+      .sort()
+      .join("_");
+    patternKey = `${(context || "unknown")}:${tokens || "unknown"}`.toLowerCase();
   } catch { /* self-review module may not be loaded yet */ }
 
+  const info = d
+    .prepare(
+      "INSERT INTO error_log (error_message, stack, context, tool_name, pattern_key) VALUES (?, ?, ?, ?, ?)",
+    )
+    .run(message, stack, context ?? null, toolName ?? null, patternKey);
+  log.debug(`[error_log] Recorded error #${info.lastInsertRowid}: ${message.slice(0, 80)}`);
+
   return info.lastInsertRowid as number;
+}
+
+export function getErrorsByPattern(patternKey: string, limit = 20): ErrorLogRow[] {
+  const d = getDb();
+  return d
+    .prepare("SELECT * FROM error_log WHERE pattern_key = ? ORDER BY id DESC LIMIT ?")
+    .all(patternKey, limit) as ErrorLogRow[];
+}
+
+export function getErrorTrends(hours = 24): Array<{ hour: string; count: number; context: string | null }> {
+  const d = getDb();
+  const cutoff = Math.floor(Date.now() / 1000) - hours * 3600;
+  return d
+    .prepare(
+      `SELECT strftime('%Y-%m-%d %H:00', timestamp, 'unixepoch', 'localtime') as hour,
+              COUNT(*) as count,
+              context
+       FROM error_log WHERE timestamp > ?
+       GROUP BY hour, context ORDER BY hour`,
+    )
+    .all(cutoff) as Array<{ hour: string; count: number; context: string | null }>;
+}
+
+export function autoResolveByPattern(patternKey: string): number {
+  const d = getDb();
+  const info = d
+    .prepare(
+      "UPDATE error_log SET resolved = 1, resolution_type = 'auto' WHERE pattern_key = ? AND resolved = 0",
+    )
+    .run(patternKey);
+  return info.changes;
 }
 
 export function getRecentErrors(count = 20): ErrorLogRow[] {

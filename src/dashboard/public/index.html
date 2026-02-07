@@ -1,0 +1,1192 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kingston Dashboard</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --bg2: #161b22;
+      --bg3: #21262d;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text2: #8b949e;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+      --purple: #bc8cff;
+      --orange: #f0883e;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Top Bar ─────────────────────────────────── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 20px;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 16px; }
+    .topbar-left h1 { font-size: 18px; font-weight: 600; }
+    .topbar-left h1 span { color: var(--accent); }
+    .status-badges { display: flex; gap: 10px; }
+    .badge {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 12px;
+      font-size: 12px; font-weight: 500;
+      background: var(--bg3); border: 1px solid var(--border);
+    }
+    .badge .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      display: inline-block;
+    }
+    .dot-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .dot-yellow { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+    .dot-red { background: var(--red); box-shadow: 0 0 6px var(--red); }
+
+    /* ── Main Layout ─────────────────────────────── */
+    .main {
+      display: grid;
+      grid-template-columns: 280px 1fr 300px;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Left Panel: Agents ──────────────────────── */
+    .panel-left {
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 12px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text2);
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+    }
+
+    .agent-card {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .agent-card:hover { background: var(--bg2); }
+    .agent-card-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .agent-card-header .name {
+      font-weight: 600; font-size: 14px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .agent-card-header .status-label {
+      font-size: 11px; padding: 2px 8px;
+      border-radius: 10px; font-weight: 500;
+    }
+    .status-idle { background: rgba(59,130,246,.15); color: var(--accent); }
+    .status-running { background: rgba(63,185,80,.15); color: var(--green); }
+    .status-error { background: rgba(248,81,73,.15); color: var(--red); }
+    .status-stopped { background: rgba(139,148,158,.15); color: var(--text2); }
+    .status-backoff { background: rgba(210,153,34,.15); color: var(--yellow); }
+
+    .agent-meta { font-size: 12px; color: var(--text2); line-height: 1.6; }
+    .agent-meta span { margin-right: 12px; }
+
+    .feed-section { flex: 1; overflow-y: auto; }
+    .feed-item {
+      padding: 8px 16px;
+      font-size: 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 10px;
+    }
+    .feed-time { color: var(--text2); white-space: nowrap; font-family: monospace; }
+    .feed-agent {
+      font-weight: 600; white-space: nowrap; min-width: 55px;
+    }
+    .feed-agent.scout { color: var(--accent); }
+    .feed-agent.analyst { color: var(--purple); }
+    .feed-msg { color: var(--text); flex: 1; }
+    .feed-duration { color: var(--text2); white-space: nowrap; }
+
+    /* ── Center Panel: Chat ──────────────────────── */
+    .panel-center {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .chat-tabs {
+      display: flex;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+    }
+    .chat-tab {
+      flex: 1; padding: 10px;
+      text-align: center; font-size: 13px; font-weight: 600;
+      cursor: pointer; border-bottom: 2px solid transparent;
+      color: var(--text2); transition: all 0.15s;
+    }
+    .chat-tab:hover { color: var(--text); background: var(--bg3); }
+    .chat-tab.active {
+      color: var(--accent); border-bottom-color: var(--accent);
+      background: transparent;
+    }
+    .chat-tab.emile.active {
+      color: var(--purple); border-bottom-color: var(--purple);
+    }
+
+    .chat-messages {
+      flex: 1; overflow-y: auto; padding: 16px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .msg {
+      max-width: 80%; padding: 10px 14px;
+      border-radius: 12px; font-size: 14px; line-height: 1.5;
+      word-wrap: break-word; white-space: pre-wrap;
+    }
+    .msg-user {
+      align-self: flex-end;
+      background: var(--accent); color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .msg-assistant {
+      align-self: flex-start;
+      background: var(--bg3); color: var(--text);
+      border-bottom-left-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .msg-assistant.emile {
+      border-color: rgba(188,140,255,.3);
+    }
+    .msg-system {
+      align-self: center;
+      color: var(--text2); font-size: 12px; font-style: italic;
+    }
+
+    .chat-input-area {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--bg2);
+      display: flex;
+      gap: 10px;
+    }
+    .chat-input-area textarea {
+      flex: 1; background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 14px;
+      color: var(--text); font-size: 14px;
+      font-family: inherit; resize: none;
+      outline: none; min-height: 42px; max-height: 120px;
+    }
+    .chat-input-area textarea:focus { border-color: var(--accent); }
+    .chat-input-area button {
+      background: var(--accent); color: #fff; border: none;
+      border-radius: 8px; padding: 0 20px;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .chat-input-area button:hover { opacity: 0.85; }
+    .chat-input-area button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .chat-input-area button.emile-btn { background: var(--purple); }
+    .chat-input-area button.conseil-btn {
+      background: linear-gradient(135deg, var(--accent), var(--purple));
+    }
+
+    /* ── Conseil mode: labeled messages ─────────── */
+    .msg-label {
+      font-size: 11px; font-weight: 700;
+      margin-bottom: 4px; letter-spacing: 0.3px;
+    }
+    .msg-label.kingston { color: var(--accent); }
+    .msg-label.emile { color: var(--purple); }
+    .msg-assistant.kingston-msg {
+      border-color: rgba(88,166,255,.3);
+    }
+    .msg-assistant.emile-msg {
+      border-color: rgba(188,140,255,.3);
+    }
+    .continue-bar {
+      padding: 8px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--bg2);
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+    .continue-bar button {
+      background: var(--bg3);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 16px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .continue-bar button:hover {
+      border-color: var(--accent);
+      background: var(--bg);
+    }
+    .continue-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .continue-bar .continue-kingston:hover { border-color: var(--accent); }
+    .continue-bar .continue-emile:hover { border-color: var(--purple); }
+    .continue-bar .continue-both:hover {
+      border-color: var(--purple);
+      background: rgba(88,166,255,.05);
+    }
+
+    /* ── Right Panel: Intelligence ────────────────── */
+    .panel-right {
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .intel-section {
+      border-bottom: 1px solid var(--border);
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .intel-section:last-child { flex: 1; max-height: none; }
+    .intel-header {
+      padding: 10px 14px;
+      font-size: 12px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      color: var(--text2);
+      background: var(--bg2);
+      position: sticky; top: 0;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .intel-header .count {
+      background: var(--bg3); padding: 2px 8px;
+      border-radius: 10px; font-size: 11px;
+    }
+    .intel-item {
+      padding: 8px 14px;
+      font-size: 12px; line-height: 1.5;
+      border-bottom: 1px solid rgba(48,54,61,.5);
+    }
+    .intel-item:hover { background: var(--bg2); }
+    .intel-item .timestamp {
+      color: var(--text2); font-size: 11px;
+      font-family: monospace;
+    }
+    .intel-item .error-ctx {
+      color: var(--orange); font-size: 11px;
+      margin-top: 2px;
+    }
+
+    /* ── Stats bar (bottom of right panel) ─────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: var(--border);
+    }
+    .stat-cell {
+      background: var(--bg);
+      padding: 10px 14px;
+      text-align: center;
+    }
+    .stat-cell .value {
+      font-size: 20px; font-weight: 700;
+      color: var(--accent);
+    }
+    .stat-cell .label {
+      font-size: 10px; color: var(--text2);
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin-top: 2px;
+    }
+
+    /* ── Rate limit banner ──────────────────────── */
+    .rate-limit-banner {
+      background: rgba(248,81,73,.1);
+      border: 1px solid rgba(248,81,73,.3);
+      color: var(--red);
+      padding: 6px 20px;
+      font-size: 13px;
+      text-align: center;
+      display: none;
+    }
+    .rate-limit-banner.visible { display: block; }
+
+    /* ── Scrollbar styling ──────────────────────── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--border); }
+
+    /* ── Loading spinner ────────────────────────── */
+    .typing-indicator {
+      display: flex; gap: 4px; padding: 8px 14px;
+      align-self: flex-start;
+    }
+    .typing-indicator span {
+      width: 6px; height: 6px; background: var(--text2);
+      border-radius: 50%; animation: bounce 1.4s infinite ease-in-out;
+    }
+    .typing-indicator span:nth-child(1) { animation-delay: 0s; }
+    .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0); }
+      40% { transform: scale(1); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <h1><span>K</span>ingston Dashboard</h1>
+      <div class="status-badges">
+        <div class="badge" id="badge-status">
+          <span class="dot dot-green" id="dot-status"></span>
+          <span id="status-text">Online</span>
+        </div>
+        <div class="badge" id="badge-agents">
+          <span id="agents-count">0</span> agents actifs
+        </div>
+        <div class="badge" id="badge-uptime">
+          Uptime: <span id="uptime-text">--</span>
+        </div>
+        <div class="badge" id="badge-ws">
+          WS: <span class="dot dot-green" id="dot-ws"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rate limit banner -->
+  <div class="rate-limit-banner" id="rate-banner">
+    Rate limit actif — agents en pause jusqu'a <span id="rate-reset-time">--</span>
+  </div>
+
+  <!-- Main 3-panel layout -->
+  <div class="main">
+
+    <!-- LEFT: Agent Monitor -->
+    <div class="panel-left">
+      <div class="panel-header">Agents</div>
+      <div id="agents-container"></div>
+      <div class="panel-header">Live Feed</div>
+      <div class="feed-section" id="feed-container"></div>
+    </div>
+
+    <!-- CENTER: Chat -->
+    <div class="panel-center">
+      <div class="chat-tabs">
+        <div class="chat-tab active" data-tab="kingston" onclick="switchTab('kingston')">
+          Kingston
+        </div>
+        <div class="chat-tab emile" data-tab="emile" onclick="switchTab('emile')">
+          Emile
+        </div>
+        <div class="chat-tab" data-tab="conseil" onclick="switchTab('conseil')"
+          style="background: linear-gradient(135deg, rgba(88,166,255,.05), rgba(188,140,255,.05));">
+          Conseil
+        </div>
+      </div>
+      <div class="chat-messages" id="chat-messages"></div>
+      <div class="continue-bar" id="continue-bar" style="display:none;">
+        <button class="continue-kingston" onclick="continueDialogue('kingston')" id="cont-kingston">
+          Kingston repond
+        </button>
+        <button class="continue-emile" onclick="continueDialogue('emile')" id="cont-emile">
+          Emile repond
+        </button>
+        <button class="continue-both" onclick="continueDialogue('both')" id="cont-both">
+          Relancer le dialogue
+        </button>
+        <button onclick="stopConseil()" id="cont-stop" style="display:none; border-color:var(--red); color:var(--red);">
+          Stop
+        </button>
+        <span style="font-size:11px; color:var(--text2); align-self:center;" id="rounds-label"></span>
+      </div>
+      <div class="chat-input-area">
+        <textarea id="chat-input" rows="1" placeholder="Parle a Kingston..."
+          onkeydown="handleKeyDown(event)"></textarea>
+        <button id="send-btn" onclick="sendMessage()">Envoyer</button>
+      </div>
+    </div>
+
+    <!-- RIGHT: Intelligence -->
+    <div class="panel-right">
+      <!-- Stats -->
+      <div class="intel-section">
+        <div class="intel-header">Metriques 24h</div>
+        <div class="stats-grid">
+          <div class="stat-cell">
+            <div class="value" id="stat-runs">--</div>
+            <div class="label">Runs</div>
+          </div>
+          <div class="stat-cell">
+            <div class="value" id="stat-errors" style="color: var(--green);">--</div>
+            <div class="label">Erreurs</div>
+          </div>
+          <div class="stat-cell">
+            <div class="value" id="stat-notes">--</div>
+            <div class="label">Notes</div>
+          </div>
+          <div class="stat-cell">
+            <div class="value" id="stat-memory">--</div>
+            <div class="label">RAM (MB)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Errors -->
+      <div class="intel-section">
+        <div class="intel-header">
+          Erreurs recentes
+          <span class="count" id="error-count">0</span>
+        </div>
+        <div id="errors-container"></div>
+      </div>
+
+      <!-- Notes -->
+      <div class="intel-section">
+        <div class="intel-header">
+          Notes
+          <span class="count" id="notes-count">0</span>
+        </div>
+        <div id="notes-container"></div>
+      </div>
+
+      <!-- Learning Insights -->
+      <div class="intel-section">
+        <div class="intel-header">
+          Apprentissage
+          <span class="count" id="learning-count" style="background:var(--purple)">0</span>
+        </div>
+        <div id="learning-summary" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;"></div>
+        <div id="learning-effectiveness" style="margin-bottom:8px;"></div>
+        <div id="learning-patterns"></div>
+        <canvas id="error-trend-chart" width="300" height="80" style="width:100%;margin-top:8px;"></canvas>
+      </div>
+    </div>
+  </div>
+
+<script>
+// ── State ───────────────────────────────────────────────
+let activeTab = 'kingston';
+let ws = null;
+// No more global sending lock — input is always available
+
+const chatHistory = {
+  kingston: [],
+  emile: [],
+  conseil: [],
+};
+
+// ── WebSocket ───────────────────────────────────────────
+function connectWS() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('dot-ws').className = 'dot dot-green';
+  };
+
+  ws.onclose = () => {
+    document.getElementById('dot-ws').className = 'dot dot-red';
+    setTimeout(connectWS, 3000);
+  };
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    handleWSEvent(msg);
+  };
+}
+
+function handleWSEvent(msg) {
+  if (msg.event === 'init') {
+    renderAgents(msg.data);
+  } else if (msg.event === 'agent_run') {
+    addFeedItem(msg.data);
+    refreshAgents();
+  } else if (msg.event === 'log') {
+    // Could add to a log panel
+  } else if (msg.event === 'error') {
+    refreshErrors();
+  }
+}
+
+// ── API Calls ───────────────────────────────────────────
+async function api(path) {
+  const res = await fetch(`/api/${path}`);
+  return res.json();
+}
+
+async function refreshAgents() {
+  const data = await api('agents');
+  renderAgents(data);
+}
+
+async function refreshStats() {
+  const data = await api('stats');
+  renderStats(data);
+}
+
+async function refreshErrors() {
+  const data = await api('errors');
+  renderErrors(data);
+}
+
+async function refreshNotes() {
+  const data = await api('notes');
+  renderNotes(data);
+}
+
+async function refreshFeed() {
+  // Get recent runs for all agents
+  const agents = ['scout', 'analyst', 'learner', 'executor'];
+  let allRuns = [];
+  for (const a of agents) {
+    try {
+      const runs = await api(`agents/${a}/runs`);
+      allRuns = allRuns.concat(runs);
+    } catch {}
+  }
+  allRuns.sort((a, b) => b.started_at - a.started_at);
+  renderFeed(allRuns.slice(0, 30));
+}
+
+async function refreshPatterns() {
+  const data = await api('learned');
+  renderPatterns(data);
+}
+
+// ── Renderers ───────────────────────────────────────────
+function renderAgents(data) {
+  const container = document.getElementById('agents-container');
+  const agents = data.agents || [];
+  const rateLimited = data.rateLimited;
+
+  // Rate limit banner
+  const banner = document.getElementById('rate-banner');
+  if (rateLimited) {
+    banner.classList.add('visible');
+    const resetTime = new Date(data.rateLimitReset).toLocaleTimeString('fr-CA');
+    document.getElementById('rate-reset-time').textContent = resetTime;
+  } else {
+    banner.classList.remove('visible');
+  }
+
+  // Agent count badge
+  const activeCount = agents.filter(a => a.status === 'idle' || a.status === 'running').length;
+  document.getElementById('agents-count').textContent = activeCount;
+
+  container.innerHTML = agents.map(a => {
+    const nextRun = a.lastRunAt
+      ? formatCountdown(a.lastRunAt * 1000 + a.heartbeatMs - Date.now())
+      : '--';
+    const lastRun = a.lastRunAt
+      ? new Date(a.lastRunAt * 1000).toLocaleTimeString('fr-CA')
+      : 'jamais';
+
+    return `
+      <div class="agent-card" onclick="showAgentDetail('${a.id}')">
+        <div class="agent-card-header">
+          <span class="name">
+            <span class="dot dot-${statusColor(a.status)}"></span>
+            ${a.name}
+          </span>
+          <span class="status-label status-${a.status}">${a.status}</span>
+        </div>
+        <div class="agent-meta">
+          <span>Cycle ${a.cycle}</span>
+          <span>${a.totalRuns} runs</span>
+          <span>${a.consecutiveErrors} err</span>
+        </div>
+        <div class="agent-meta">
+          <span>Dernier: ${lastRun}</span>
+          <span>Prochain: ${nextRun}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderStats(data) {
+  // Uptime
+  document.getElementById('uptime-text').textContent = formatDuration(data.uptime);
+
+  // Stats cells
+  const totalRuns = (data.agentStats || []).reduce((sum, a) => sum + a.total, 0);
+  const totalErrors = (data.agentStats || []).reduce((sum, a) => sum + a.errors, 0);
+
+  document.getElementById('stat-runs').textContent = totalRuns;
+  document.getElementById('stat-errors').textContent = totalErrors;
+  document.getElementById('stat-errors').style.color =
+    totalErrors > 0 ? 'var(--red)' : 'var(--green)';
+  document.getElementById('stat-notes').textContent = data.noteCount || 0;
+  document.getElementById('stat-memory').textContent = data.memory?.heap || '--';
+}
+
+function renderFeed(runs) {
+  const container = document.getElementById('feed-container');
+  container.innerHTML = runs.map(r => {
+    const time = new Date(r.started_at * 1000).toLocaleTimeString('fr-CA', {
+      hour: '2-digit', minute: '2-digit'
+    });
+    const duration = r.duration_ms ? `${(r.duration_ms / 1000).toFixed(1)}s` : '--';
+    const outcomeIcon = r.outcome === 'success' ? '' :
+      r.outcome === 'error' ? ' [ERR]' : ' [RATE]';
+
+    return `
+      <div class="feed-item">
+        <span class="feed-time">${time}</span>
+        <span class="feed-agent ${r.agent_id}">${r.agent_id}</span>
+        <span class="feed-msg">cycle ${r.cycle}${outcomeIcon}</span>
+        <span class="feed-duration">${duration}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderErrors(errors) {
+  const container = document.getElementById('errors-container');
+  document.getElementById('error-count').textContent = errors.length;
+
+  container.innerHTML = errors.slice(0, 10).map(e => {
+    const time = new Date(e.timestamp * 1000).toLocaleTimeString('fr-CA');
+    const msg = (e.error_message || '').slice(0, 100);
+    return `
+      <div class="intel-item">
+        <span class="timestamp">${time}</span> ${msg}
+        ${e.context ? `<div class="error-ctx">${e.context}</div>` : ''}
+      </div>
+    `;
+  }).join('') || '<div class="intel-item" style="color:var(--green)">Aucune erreur</div>';
+}
+
+function renderNotes(notes) {
+  const container = document.getElementById('notes-container');
+  document.getElementById('notes-count').textContent = notes.length;
+
+  container.innerHTML = notes.slice(0, 15).map(n => {
+    const date = new Date(n.created_at * 1000).toLocaleDateString('fr-CA');
+    const text = (n.text || '').slice(0, 80);
+    return `
+      <div class="intel-item">
+        <span class="timestamp">${date}</span> ${text}
+      </div>
+    `;
+  }).join('') || '<div class="intel-item" style="color:var(--text2)">Aucune note</div>';
+}
+
+async function refreshLearning() {
+  try {
+    const data = await api('learning');
+    renderLearning(data);
+  } catch { /* learning API may not be available yet */ }
+}
+
+function renderLearning(data) {
+  if (!data) return;
+  const s = data.summary || {};
+
+  // Count badge
+  document.getElementById('learning-count').textContent = s.graduatedRules || 0;
+
+  // Summary pills
+  const summary = document.getElementById('learning-summary');
+  summary.innerHTML = `
+    <span class="badge badge-ok" style="background:var(--bg3);color:var(--text2);font-size:11px;padding:3px 8px;">
+      ${s.totalPatterns || 0} patterns
+    </span>
+    <span class="badge" style="background:var(--purple);color:#fff;font-size:11px;padding:3px 8px;">
+      ${s.graduatedRules || 0} regles
+    </span>
+    <span class="badge" style="background:var(--yellow);color:#000;font-size:11px;padding:3px 8px;">
+      ${s.nearGraduation || 0} proches
+    </span>
+    <span class="badge" style="background:${s.effectiveRules > 0 ? 'var(--green)' : 'var(--bg3)'};color:${s.effectiveRules > 0 ? '#fff' : 'var(--text2)'};font-size:11px;padding:3px 8px;">
+      ${s.effectiveRules || 0} efficaces
+    </span>
+  `;
+
+  // Effectiveness
+  const eff = document.getElementById('learning-effectiveness');
+  if (data.effectiveness && data.effectiveness.length > 0) {
+    eff.innerHTML = data.effectiveness.slice(0, 5).map(e => {
+      const icon = e.effective ? '<span style="color:var(--green)">OK</span>' : '<span style="color:var(--red)">!</span>';
+      const bar = `<div style="background:var(--bg3);border-radius:4px;height:6px;width:100%;margin-top:3px;">
+        <div style="background:${e.effective ? 'var(--green)' : 'var(--red)'};height:6px;border-radius:4px;width:${Math.min(e.score, 100)}%;"></div>
+      </div>`;
+      return `<div class="intel-item" style="font-size:11px;">
+        ${icon} <strong>${e.key.split(':').pop()}</strong> — ${e.score}%
+        <span style="color:var(--text2)">(${e.postHits} post-hits)</span>
+        ${bar}
+      </div>`;
+    }).join('');
+  } else {
+    eff.innerHTML = '';
+  }
+
+  // Patterns list
+  const pats = document.getElementById('learning-patterns');
+  if (data.patterns && data.patterns.length > 0) {
+    pats.innerHTML = data.patterns.slice(0, 8).map(p => {
+      const status = p.graduated
+        ? `<span style="color:var(--green);font-weight:600;">GRAD</span>`
+        : `<span style="color:var(--text2);">${p.count}/5</span>`;
+      const desc = (p.description || '').slice(0, 60);
+      const postHits = p.graduated && p.postGraduationHits > 0
+        ? ` <span style="color:var(--red);">(+${p.postGraduationHits})</span>`
+        : '';
+      return `<div class="intel-item" style="font-size:11px;">
+        ${status}${postHits} ${desc}
+        ${p.toolName ? `<span style="color:var(--accent);">[${p.toolName}]</span>` : ''}
+      </div>`;
+    }).join('');
+  } else {
+    pats.innerHTML = '<div class="intel-item" style="color:var(--text2);font-size:11px;">Aucun pattern</div>';
+  }
+
+  // Error trend mini-chart
+  if (data.trends && data.trends.length > 0) {
+    drawTrendChart(data.trends);
+  }
+}
+
+function drawTrendChart(trends) {
+  const canvas = document.getElementById('error-trend-chart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  // Aggregate by hour
+  const hourMap = {};
+  for (const t of trends) {
+    hourMap[t.hour] = (hourMap[t.hour] || 0) + t.count;
+  }
+  const hours = Object.keys(hourMap).sort();
+  const counts = hours.map(h => hourMap[h]);
+  const maxCount = Math.max(...counts, 1);
+
+  if (hours.length < 2) return;
+
+  const stepX = w / (hours.length - 1);
+  const pad = 4;
+
+  // Draw area
+  ctx.beginPath();
+  ctx.moveTo(0, h);
+  counts.forEach((c, i) => {
+    const x = i * stepX;
+    const y = h - pad - (c / maxCount) * (h - pad * 2);
+    ctx.lineTo(x, y);
+  });
+  ctx.lineTo(w, h);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(248, 81, 73, 0.15)';
+  ctx.fill();
+
+  // Draw line
+  ctx.beginPath();
+  counts.forEach((c, i) => {
+    const x = i * stepX;
+    const y = h - pad - (c / maxCount) * (h - pad * 2);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#f85149';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Label last point
+  const lastCount = counts[counts.length - 1];
+  ctx.fillStyle = 'var(--text2)';
+  ctx.font = '9px sans-serif';
+  ctx.fillText(`${lastCount} err`, w - 35, 10);
+}
+
+// ── Chat ────────────────────────────────────────────────
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.chat-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === tab);
+  });
+  const input = document.getElementById('chat-input');
+  const btn = document.getElementById('send-btn');
+  const continueBar = document.getElementById('continue-bar');
+
+  if (tab === 'emile') {
+    input.placeholder = 'Parle a Emile...';
+    btn.className = 'emile-btn';
+    btn.style.background = 'var(--purple)';
+    continueBar.style.display = 'none';
+  } else if (tab === 'conseil') {
+    input.placeholder = 'Pose une question aux deux...';
+    btn.className = 'conseil-btn';
+    btn.style.background = 'linear-gradient(135deg, var(--accent), var(--purple))';
+    // Show continue bar if there are messages
+    continueBar.style.display = chatHistory.conseil.length > 1 ? 'flex' : 'none';
+  } else {
+    input.placeholder = 'Parle a Kingston...';
+    btn.className = '';
+    btn.style.background = 'var(--accent)';
+    continueBar.style.display = 'none';
+  }
+  renderChat();
+}
+
+function renderChat() {
+  const container = document.getElementById('chat-messages');
+  const history = chatHistory[activeTab];
+
+  container.innerHTML = history.map(m => {
+    if (m.role === 'system') {
+      return `<div class="msg msg-system">${m.content}</div>`;
+    }
+    if (m.role === 'user') {
+      return `<div class="msg msg-user">${escapeHtml(m.content)}</div>`;
+    }
+    // Assistant messages — in conseil mode, show who is speaking
+    if (activeTab === 'conseil' && m.agent) {
+      const agentCls = m.agent === 'kingston' ? 'kingston-msg' : 'emile-msg';
+      const labelCls = m.agent === 'kingston' ? 'kingston' : 'emile';
+      const label = m.agent === 'kingston' ? 'KINGSTON' : 'EMILE';
+      return `<div class="msg msg-assistant ${agentCls}">
+        <div class="msg-label ${labelCls}">${label}</div>
+        ${escapeHtml(m.content)}
+      </div>`;
+    }
+    const cls = `msg-assistant${activeTab === 'emile' ? ' emile' : ''}`;
+    return `<div class="msg ${cls}">${escapeHtml(m.content)}</div>`;
+  }).join('');
+
+  container.scrollTop = container.scrollHeight;
+}
+
+function addMessage(tab, role, content) {
+  chatHistory[tab].push({ role, content });
+  if (activeTab === tab) renderChat();
+}
+
+function showTyping() {
+  const container = document.getElementById('chat-messages');
+  const el = document.createElement('div');
+  el.id = 'typing';
+  el.className = 'typing-indicator';
+  el.innerHTML = '<span></span><span></span><span></span>';
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+}
+
+function hideTyping() {
+  const el = document.getElementById('typing');
+  if (el) el.remove();
+}
+
+async function sendMessage() {
+  const input = document.getElementById('chat-input');
+  const message = input.value.trim();
+  if (!message) return;
+
+  input.value = '';
+  input.style.height = 'auto';
+  // Input stays enabled — user can always type
+
+  addMessage(activeTab, 'user', message);
+
+  if (activeTab === 'conseil') {
+    // In conseil: inject user message, restart agent dialogue
+    conseilRunning = false; // stop current auto-dialogue if any
+    await sleep(300); // let current request finish gracefully
+    conseilSend(message); // fire and forget — don't await
+  } else if (activeTab === 'kingston') {
+    fetchAgent('kingston', '/api/chat/kingston', message);
+  } else {
+    fetchAgent('emile', '/api/chat/emile', message);
+  }
+}
+
+// Fire-and-forget agent call — never blocks input
+async function fetchAgent(tab, endpoint, message) {
+  showTyping();
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+    });
+    const data = await res.json();
+    hideTyping();
+    addMessage(tab, 'assistant', data.response || 'No response.');
+  } catch (err) {
+    hideTyping();
+    addMessage(tab, 'system', `Erreur: ${err.message}`);
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── Conseil Mode — Autonomous Agent Dialogue ────────────
+const MAX_AUTO_ROUNDS = Infinity; // Runs until user clicks Stop
+let conseilRunning = false;
+let conseilRound = 0;
+
+async function conseilSend(message) {
+  conseilRunning = true;
+  conseilRound = 0;
+  showStopButton(true);
+  updateRoundsLabel();
+
+  // Kingston responds — reads code and acts
+  const context = buildContext();
+  const kingstonPrompt = context
+    ? `[MODE CONSEIL — TRAVAIL COLLABORATIF]\n${context}\n\nNICOLAS: ${message}\n\n` +
+      `INSTRUCTIONS: Lis le code pertinent (files.read_anywhere), analyse, et propose une action concrete. ` +
+      `Si tu peux implementer directement, fais-le (files.write_anywhere). ` +
+      `Termine par: FAIT: [ce que tu as fait] / SUITE: [prochaine etape pour Emile]`
+    : `[MODE CONSEIL — TRAVAIL COLLABORATIF]\nNICOLAS: ${message}\n\n` +
+      `INSTRUCTIONS: Lis le code pertinent (files.read_anywhere), analyse, et agis. ` +
+      `Termine par: FAIT: [ce que tu as fait] / SUITE: [prochaine etape pour Emile]`;
+  const kingstonResponse = await agentRespond('kingston', kingstonPrompt);
+  if (!conseilRunning) return;
+
+  // Emile responds — reviews Kingston's work and continues
+  const updatedContext = buildContext();
+  await agentRespond('emile',
+    `[MODE CONSEIL — REVUE + IMPLEMENTATION]\n${updatedContext}\n\n` +
+    `INSTRUCTIONS: Revise ce que Kingston a fait. Lis le code modifie (files.read_anywhere). ` +
+    `Si c'est bon, continue l'implementation sur un autre aspect. Si c'est mauvais, corrige. ` +
+    `Termine par: FAIT: [ce que tu as fait] / SUITE: [prochaine etape pour Kingston]`
+  );
+  if (!conseilRunning) return;
+
+  // Auto-continue
+  conseilRound = 1;
+  updateRoundsLabel();
+  await autoDialogue();
+}
+
+async function autoDialogue() {
+  while (conseilRunning && conseilRound < MAX_AUTO_ROUNDS) {
+    const context = buildContext();
+
+    // Kingston — implement next step from Émile's suggestion
+    await agentRespond('kingston',
+      `[CONSEIL TOUR ${conseilRound + 1} — KINGSTON IMPLEMENTE]\n${context}\n\n` +
+      `INSTRUCTIONS: Lis la suggestion d'Emile ci-dessus. Implemente-la concretement :\n` +
+      `1. Lis les fichiers concernes (files.read_anywhere)\n` +
+      `2. Ecris les modifications (files.write_anywhere)\n` +
+      `3. Si besoin, execute un test (shell.exec)\n` +
+      `FAIT: [actions prises] / SUITE: [prochaine etape pour Emile]`
+    );
+    if (!conseilRunning) break;
+
+    // Émile — review and advance
+    const updatedContext = buildContext();
+    await agentRespond('emile',
+      `[CONSEIL TOUR ${conseilRound + 1} — EMILE REVISE + AVANCE]\n${updatedContext}\n\n` +
+      `INSTRUCTIONS: Revise le travail de Kingston. Verifie le code modifie (files.read_anywhere).\n` +
+      `1. Si correct → implemente la prochaine piece du puzzle\n` +
+      `2. Si incorrect → corrige et explique pourquoi\n` +
+      `3. Si tout est fait → notes.add pour documenter + propose le prochain objectif\n` +
+      `FAIT: [actions prises] / SUITE: [prochaine etape pour Kingston]`
+    );
+    if (!conseilRunning) break;
+
+    conseilRound++;
+    updateRoundsLabel();
+  }
+
+  // Dialogue ended
+  conseilRunning = false;
+  showStopButton(false);
+  document.getElementById('continue-bar').style.display = 'flex';
+  addMessage('conseil', 'system',
+    `Dialogue arrete apres ${conseilRound} tours.`
+  );
+}
+
+async function agentRespond(agent, prompt) {
+  showTyping();
+  try {
+    const endpoint = agent === 'kingston' ? '/api/chat/kingston' : '/api/chat/emile';
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: prompt }),
+    });
+    const data = await res.json();
+    const response = data.response || 'No response.';
+    hideTyping();
+    chatHistory.conseil.push({ role: 'assistant', content: response, agent });
+    renderChat();
+    return response;
+  } catch (err) {
+    hideTyping();
+    const errMsg = `Erreur ${agent}: ${err.message}`;
+    addMessage('conseil', 'system', errMsg);
+    conseilRunning = false;
+    return errMsg;
+  }
+}
+
+function buildContext() {
+  return chatHistory.conseil
+    .filter(m => m.role !== 'system')
+    .slice(-6)
+    .map(m => {
+      const label = m.agent ? m.agent.toUpperCase() : 'NICOLAS';
+      return `${label}: ${m.content}`;
+    })
+    .join('\n\n');
+}
+
+async function continueDialogue(who) {
+  if (who === 'both') {
+    conseilRunning = true;
+    conseilRound = 0;
+    showStopButton(true);
+    autoDialogue(); // fire and forget
+    return;
+  }
+
+  const context = buildContext();
+  const agent = who === 'kingston' ? 'KINGSTON' : 'EMILE';
+  const prompt = `[CONVERSATION EN COURS — ${agent} CONTINUE]\n${context}\n\n` +
+    `Continue le travail. Lis le code, implemente la prochaine etape, reporte ce que tu as fait.\n` +
+    `FAIT: [actions] / SUITE: [prochaine etape]`;
+  agentRespond(who, prompt); // fire and forget
+}
+
+function stopConseil() {
+  conseilRunning = false;
+  hideTyping();
+  showStopButton(false);
+  addMessage('conseil', 'system', 'Dialogue interrompu.');
+}
+
+function showStopButton(show) {
+  document.getElementById('cont-stop').style.display = show ? 'inline-block' : 'none';
+  document.getElementById('cont-kingston').style.display = show ? 'none' : 'inline-block';
+  document.getElementById('cont-emile').style.display = show ? 'none' : 'inline-block';
+  document.getElementById('cont-both').style.display = show ? 'none' : 'inline-block';
+  document.getElementById('continue-bar').style.display = 'flex';
+}
+
+function updateRoundsLabel() {
+  document.getElementById('rounds-label').textContent =
+    conseilRunning ? `Tour ${conseilRound + 1}` : '';
+}
+
+function disableContinueButtons(disabled) {
+  document.getElementById('cont-kingston').disabled = disabled;
+  document.getElementById('cont-emile').disabled = disabled;
+  document.getElementById('cont-both').disabled = disabled;
+}
+
+function handleKeyDown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+  // Auto-resize
+  const input = e.target;
+  setTimeout(() => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  }, 0);
+}
+
+function showAgentDetail(id) {
+  // Quick detail: show runs in feed
+  api(`agents/${id}/runs`).then(runs => {
+    renderFeed(runs.slice(0, 30));
+  });
+}
+
+// ── Helpers ─────────────────────────────────────────────
+function statusColor(status) {
+  switch (status) {
+    case 'running': return 'green';
+    case 'idle': return 'green';
+    case 'error': return 'red';
+    case 'stopped': return 'red';
+    case 'backoff': return 'yellow';
+    default: return 'yellow';
+  }
+}
+
+function formatDuration(ms) {
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  if (h > 0) return `${h}h${m}m`;
+  return `${m}m`;
+}
+
+function formatCountdown(ms) {
+  if (ms <= 0) return 'now';
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  if (m > 0) return `${m}m${s}s`;
+  return `${s}s`;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// ── Init ────────────────────────────────────────────────
+async function init() {
+  connectWS();
+
+  // Add welcome messages
+  addMessage('kingston', 'system', 'Chat avec Kingston — ton assistant Telegram');
+  addMessage('emile', 'system', 'Chat avec Emile — architecte & strategie (Claude Sonnet via API)');
+  addMessage('conseil', 'system', 'Mode Conseil — Kingston et Emile collaborent sur le code. Donne un objectif, ils implementent ensemble tour par tour.');
+
+  // Initial data load
+  await Promise.all([
+    refreshAgents(),
+    refreshStats(),
+    refreshFeed(),
+    refreshErrors(),
+    refreshNotes(),
+    refreshLearning(),
+  ]);
+
+  // Periodic refresh
+  setInterval(refreshAgents, 10000);
+  setInterval(refreshStats, 15000);
+  setInterval(refreshFeed, 20000);
+  setInterval(refreshErrors, 30000);
+  setInterval(refreshNotes, 60000);
+  setInterval(refreshLearning, 30000);
+}
+
+init();
+</script>
+</body>
+</html>

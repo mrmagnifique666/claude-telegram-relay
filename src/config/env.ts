@@ -101,6 +101,16 @@ function buildConfig() {
     streamingEnabled: optional("STREAMING_ENABLED", "true") === "true",
     draftEditIntervalMs: Number(optional("DRAFT_EDIT_INTERVAL_MS", "300")),
     draftStartThreshold: Number(optional("DRAFT_START_THRESHOLD", "40")),
+
+    // Agents
+    agentScoutEnabled: optional("AGENT_SCOUT_ENABLED", "false") === "true",
+    agentScoutHeartbeatMs: Number(optional("AGENT_SCOUT_HEARTBEAT_MS", "1800000")),
+    agentAnalystEnabled: optional("AGENT_ANALYST_ENABLED", "false") === "true",
+    agentAnalystHeartbeatMs: Number(optional("AGENT_ANALYST_HEARTBEAT_MS", "3600000")),
+    agentLearnerEnabled: optional("AGENT_LEARNER_ENABLED", "false") === "true",
+    agentLearnerHeartbeatMs: Number(optional("AGENT_LEARNER_HEARTBEAT_MS", "7200000")),
+    agentExecutorEnabled: optional("AGENT_EXECUTOR_ENABLED", "true") === "true",
+    agentExecutorHeartbeatMs: Number(optional("AGENT_EXECUTOR_HEARTBEAT_MS", "300000")),
   };
 }
 

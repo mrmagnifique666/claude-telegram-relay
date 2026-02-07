@@ -135,11 +135,20 @@ export function createBot(): Bot {
 
   // Wire bot API into telegram.send skill
   setBotSendFn(async (chatId, text) => {
+    // Prepend timestamp to all messages
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString("en-US", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+    const textWithTime = `[${timeStr}] ${text}`;
     try {
-      await bot.api.sendMessage(chatId, text, { parse_mode: "Markdown" });
+      await bot.api.sendMessage(chatId, textWithTime, { parse_mode: "Markdown" });
     } catch {
       // Fallback: send without Markdown if parsing fails (e.g. unescaped special chars)
-      await bot.api.sendMessage(chatId, text);
+      await bot.api.sendMessage(chatId, textWithTime);
     }
   });
 
@@ -374,7 +383,12 @@ export function createBot(): Bot {
         localPath = await downloadTelegramFile(bot, largest.file_id, filename);
         log.info(`Downloaded photo to ${localPath}`);
 
-        const message = `[Image: ${localPath}]\n${caption}`.trim();
+        // Use Anthropic Vision API for real image analysis (not base64 text)
+        const { describeImage } = await import("../llm/vision.js");
+        const description = await describeImage(localPath, caption || "Que vois-tu dans cette image?");
+        log.info(`[telegram] Vision analysis: ${description.slice(0, 100)}...`);
+
+        const message = `[L'utilisateur a envoyé une photo. Voici l'analyse de l'image:]\n${description}${caption ? `\n\n[Légende:] ${caption}` : ""}`;
         const response = await handleMessage(chatId, message, userId);
         await sendLong(ctx, response);
         await reaction.done();
