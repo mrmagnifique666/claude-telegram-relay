@@ -4,6 +4,7 @@
  */
 import { registerSkill } from "../loader.js";
 import { getDb } from "../../storage/store.js";
+import { annotateWithTrust } from "../../memory/trust-decay.js";
 
 registerSkill({
   name: "notes.add",
@@ -38,9 +39,7 @@ registerSkill({
       .prepare("SELECT id, text, created_at FROM notes ORDER BY id ASC")
       .all() as { id: number; text: string; created_at: number }[];
     if (rows.length === 0) return "No notes yet.";
-    return rows
-      .map((n) => `#${n.id} [${new Date(n.created_at * 1000).toISOString()}]: ${n.text}`)
-      .join("\n");
+    return annotateWithTrust(rows, "observation");
   },
 });
 

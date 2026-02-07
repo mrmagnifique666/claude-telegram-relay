@@ -10,6 +10,8 @@ import os from "node:os";
 import { spawn } from "node:child_process";
 import { registerSkill } from "../loader.js";
 import { clearSession, clearTurns } from "../../storage/store.js";
+import { saveLifeboatRaw, loadLifeboat } from "../../orchestrator/lifeboat.js";
+import { getPatternSummary } from "../../memory/self-review.js";
 import { config } from "../../config/env.js";
 import { log } from "../../utils/log.js";
 
@@ -171,5 +173,78 @@ registerSkill({
       proc.unref();
       resolve(`Opened: ${target}`);
     });
+  },
+});
+
+// ── system.lifeboat ── Save/load context lifeboat (handoff packet)
+
+registerSkill({
+  name: "system.lifeboat",
+  description:
+    "Save or load a context lifeboat (handoff packet). " +
+    "Use 'save' to checkpoint critical context before it's lost. " +
+    "Use 'load' to read the current lifeboat.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      action: { type: "string", description: "'save' or 'load' (default: load)" },
+      goal: { type: "string", description: "Current primary objective (for save)" },
+      state: { type: "string", description: "What is already done (for save)" },
+      nextAction: { type: "string", description: "Next concrete step (for save)" },
+      constraints: { type: "string", description: "Hard rules/deadlines (for save)" },
+      unknowns: { type: "string", description: "What to verify (for save)" },
+      artifacts: { type: "string", description: "Relevant paths/IDs/links (for save)" },
+      stopConditions: { type: "string", description: "When to halt and ask user (for save)" },
+    },
+  },
+  async execute(args): Promise<string> {
+    const action = (args.action as string) || "load";
+    const chatId = Number(args.chatId) || config.allowedUsers[0] || 0;
+
+    if (action === "save") {
+      saveLifeboatRaw(chatId, {
+        goal: (args.goal as string) || "none",
+        state: (args.state as string) || "none",
+        nextAction: (args.nextAction as string) || "none",
+        constraints: (args.constraints as string) || "none",
+        unknowns: (args.unknowns as string) || "none",
+        artifacts: (args.artifacts as string) || "none",
+        stopConditions: (args.stopConditions as string) || "none",
+      });
+      return "Lifeboat saved. Context will survive compression.";
+    }
+
+    const packet = loadLifeboat(chatId);
+    if (!packet) return "No lifeboat found for this chat.";
+
+    const age = Math.round((Date.now() - new Date(packet.timestamp).getTime()) / 60_000);
+    const ageStr = age < 60 ? `${age}min ago` : `${Math.round(age / 60)}h ago`;
+    return [
+      `Lifeboat (saved ${ageStr}):`,
+      `Goal: ${packet.goal}`,
+      `State: ${packet.state}`,
+      `Next Action: ${packet.nextAction}`,
+      `Constraints: ${packet.constraints}`,
+      `Unknowns: ${packet.unknowns}`,
+      `Artifacts: ${packet.artifacts}`,
+      `Stop Conditions: ${packet.stopConditions}`,
+    ].join("\n");
+  },
+});
+
+// ── system.patterns ── View MISS/FIX error pattern tracking
+
+registerSkill({
+  name: "system.patterns",
+  description:
+    "View tracked error patterns and auto-graduated rules (MISS/FIX system). " +
+    "Shows which errors are recurring and which have been promoted to permanent rules.",
+  argsSchema: {
+    type: "object",
+    properties: {},
+  },
+  async execute(): Promise<string> {
+    return getPatternSummary();
   },
 });

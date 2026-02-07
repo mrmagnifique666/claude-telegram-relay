@@ -56,6 +56,12 @@ const EVENTS: ScheduledEvent[] = [
     intervalMin: 30,
     prompt: null, // dynamic — proactive checks at fire time
   },
+  {
+    key: "moltbook_digest",
+    type: "daily",
+    hour: 15,
+    prompt: null, // dynamic — built at fire time
+  },
 ];
 
 const CODE_REQUESTS_FILE = path.join(process.cwd(), "code-requests.json");
@@ -87,6 +93,19 @@ function buildCodeDigestPrompt(): string | null {
     log.error(`[scheduler] Error building code digest: ${err}`);
     return null;
   }
+}
+
+/**
+ * Build Moltbook digest — check trending posts and suggest engagement.
+ */
+function buildMoltbookDigestPrompt(): string {
+  return (
+    `[SCHEDULER] Moltbook daily digest. ` +
+    `Utilise moltbook.feed avec sort=hot et limit=5 pour voir les posts tendance. ` +
+    `Puis envoie un résumé concis à Nicolas via telegram.send avec les 3-5 posts les plus intéressants. ` +
+    `Si tu vois un post pertinent pour Kingston ou Nicolas, mentionne pourquoi. ` +
+    `Garde le message court et informatif.`
+  );
 }
 
 /**
@@ -168,6 +187,11 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let schedulerChatId = 0;
 let schedulerUserId = 0;
 
+// Heartbeat restraint: track consecutive silent heartbeats
+let consecutiveSilentHeartbeats = 0;
+const SILENCE_STREAK_THRESHOLD = 10; // ~5 hours of stability
+let silenceStreakNotified = false;
+
 function ensureTables(): void {
   const db = getDb();
   db.exec(`
@@ -221,6 +245,18 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
   const nowEpoch = Math.floor(Date.now() / 1000);
   setLastRun(event.key, nowEpoch);
 
+  // Moltbook daily digest
+  if (event.key === "moltbook_digest") {
+    log.info(`[scheduler] Firing Moltbook daily digest`);
+    try {
+      const prompt = buildMoltbookDigestPrompt();
+      await handleMessage(schedulerChatId, prompt, schedulerUserId);
+    } catch (err) {
+      log.error(`[scheduler] Moltbook digest error: ${err}`);
+    }
+    return;
+  }
+
   // Dynamic digest events — build prompt at fire time
   if (event.key.startsWith("code_digest_")) {
     const digestPrompt = buildCodeDigestPrompt();
@@ -237,16 +273,32 @@ async function fireEvent(event: ScheduledEvent): Promise<void> {
     return;
   }
 
-  // Proactive heartbeat — check emails + calendar
+  // Proactive heartbeat — check emails + calendar (with restraint)
   if (event.key === "heartbeat") {
-    log.debug(`[scheduler] Heartbeat tick — checking proactive alerts`);
+    log.debug(`[scheduler] Heartbeat tick — checking proactive alerts (silent streak: ${consecutiveSilentHeartbeats})`);
     try {
       const heartbeatPrompt = await buildHeartbeatPrompt();
       if (heartbeatPrompt) {
+        // Something to report — reset silence streak
+        consecutiveSilentHeartbeats = 0;
+        silenceStreakNotified = false;
         log.info(`[scheduler] Heartbeat found alerts — notifying`);
         await handleMessage(schedulerChatId, heartbeatPrompt, schedulerUserId);
       } else {
-        log.debug(`[scheduler] Heartbeat — nothing to report`);
+        // Nothing to report — increment silence streak
+        consecutiveSilentHeartbeats++;
+        log.debug(`[scheduler] Heartbeat — nothing to report (streak: ${consecutiveSilentHeartbeats})`);
+
+        // After 10 consecutive silent heartbeats (~5h), surface stability message once
+        if (consecutiveSilentHeartbeats >= SILENCE_STREAK_THRESHOLD && !silenceStreakNotified) {
+          silenceStreakNotified = true;
+          const hours = Math.round((consecutiveSilentHeartbeats * 30) / 60);
+          const stabilityMsg =
+            `[SCHEDULER] Stability report: tout est stable depuis ~${hours}h. ` +
+            `${consecutiveSilentHeartbeats} heartbeats consécutifs sans alertes. ` +
+            `Envoie un bref message de stabilité à Nicolas via telegram.send — pas d'urgence, juste un signal de confiance.`;
+          await handleMessage(schedulerChatId, stabilityMsg, schedulerUserId);
+        }
       }
     } catch (err) {
       log.error(`[scheduler] Heartbeat error: ${err}`);

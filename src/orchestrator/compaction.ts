@@ -5,6 +5,7 @@
  */
 import { getTurns, clearTurns, addTurn, type Turn } from "../storage/store.js";
 import { runClaude } from "../llm/claudeCli.js";
+import { extractAndSaveLifeboat } from "./lifeboat.js";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 
@@ -45,6 +46,12 @@ export async function compactContext(
     .join("\n\n");
 
   const prompt = `${COMPACT_SUMMARY_PROMPT}\n\n${conversationText}`;
+
+  // Save lifeboat before compaction to preserve critical context
+  log.info(`[compaction] Saving lifeboat before compacting...`);
+  await extractAndSaveLifeboat(chatId).catch((err) =>
+    log.warn(`[compaction] Lifeboat extraction failed (non-fatal): ${err}`)
+  );
 
   log.info(`[compaction] Compacting ${oldTurns.length} turns for chat ${chatId}, keeping ${recentTurns.length} recent`);
 

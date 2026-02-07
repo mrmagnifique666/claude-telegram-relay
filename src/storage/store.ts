@@ -179,6 +179,13 @@ export function logError(error: Error | string, context?: string): number {
     .prepare("INSERT INTO error_log (error_message, stack, context) VALUES (?, ?, ?)")
     .run(message, stack, context ?? null);
   log.debug(`[error_log] Recorded error #${info.lastInsertRowid}: ${message.slice(0, 80)}`);
+
+  // Feed into MISS/FIX auto-graduation system
+  try {
+    const { recordErrorPattern } = require("../memory/self-review.js");
+    recordErrorPattern(context || "unknown", message);
+  } catch { /* self-review module may not be loaded yet */ }
+
   return info.lastInsertRowid as number;
 }
 

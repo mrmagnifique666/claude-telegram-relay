@@ -13,6 +13,8 @@ import { log } from "../utils/log.js";
 import { parseClaudeOutput, type ParsedResult } from "./protocol.js";
 import { getTurns, getSession, saveSession } from "../storage/store.js";
 import { getToolCatalogPrompt } from "../skills/loader.js";
+import { getLifeboatPrompt } from "../orchestrator/lifeboat.js";
+import { getLearnedRulesPrompt } from "../memory/self-review.js";
 
 const CLI_TIMEOUT_MS = config.cliTimeoutMs;
 
@@ -68,6 +70,20 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
   const autonomousPrompt = loadAutonomousPrompt();
   if (autonomousPrompt) {
     lines.push("", autonomousPrompt);
+  }
+
+  // Inject learned rules from MISS/FIX auto-graduation
+  const learnedRules = getLearnedRulesPrompt();
+  if (learnedRules) {
+    lines.push("", learnedRules);
+  }
+
+  // Inject context lifeboat if available
+  if (chatId) {
+    const lifeboat = getLifeboatPrompt(chatId);
+    if (lifeboat) {
+      lines.push("", lifeboat);
+    }
   }
 
   return lines.join("\n");
