@@ -2,7 +2,6 @@
  * Built-in skills: browser.*
  * Puppeteer-based browser automation — admin only.
  */
-import Anthropic from "@anthropic-ai/sdk";
 import { registerSkill } from "../loader.js";
 import { browserManager } from "../../browser/manager.js";
 import { config } from "../../config/env.js";
@@ -298,7 +297,7 @@ function parseCUAction(raw: string): CUAction | null {
 registerSkill({
   name: "browser.computer_use",
   description:
-    "Autonomous browser control via screenshot analysis. Give a goal and the bot takes screenshots, analyzes them with Claude vision, and clicks/types at coordinates to achieve the goal. Requires ANTHROPIC_API_KEY.",
+    "Autonomous browser control via screenshot analysis. Give a goal and the bot takes screenshots, analyzes them with Gemini vision, and clicks/types at coordinates to achieve the goal. Requires GEMINI_API_KEY.",
   adminOnly: true,
   argsSchema: {
     type: "object",
@@ -316,14 +315,13 @@ registerSkill({
     const chatId = Number(args.chatId);
     const maxSteps = Number(args.maxSteps) || 10;
 
-    if (!config.anthropicApiKey) {
-      return "Error: ANTHROPIC_API_KEY is not set. Computer use requires the Anthropic API for vision.";
+    if (!config.geminiApiKey) {
+      return "Error: GEMINI_API_KEY is not set. Computer use requires Gemini for vision.";
     }
 
     const sendPhoto = getBotPhotoFn();
     if (!sendPhoto) return "Error: bot photo API not available.";
 
-    const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
     const page = await browserManager.getPage();
 
     // Navigate to starting URL if provided
@@ -350,37 +348,33 @@ registerSkill({
       // Send screenshot to Telegram
       await sendPhoto(chatId, screenshotBuffer, `Step ${step}/${maxSteps}`);
 
-      // Ask Claude vision for next action
+      // Ask Gemini vision for next action
       let actionText: string;
       try {
-        const response = await anthropic.messages.create({
-          model: "claude-sonnet-4-5-20250929",
-          max_tokens: 300,
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: "image/png",
-                    data: base64,
-                  },
-                },
-                {
-                  type: "text",
-                  text: VISION_PROMPT + goal,
-                },
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${config.geminiApiKey}`;
+        const geminiRes = await fetch(geminiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { inline_data: { mime_type: "image/png", data: base64 } },
+                { text: VISION_PROMPT + goal },
               ],
-            },
-          ],
+            }],
+            generationConfig: { maxOutputTokens: 300 },
+          }),
         });
 
-        actionText =
-          response.content[0].type === "text" ? response.content[0].text : "";
+        if (!geminiRes.ok) {
+          const errText = await geminiRes.text();
+          throw new Error(`Gemini ${geminiRes.status}: ${errText.slice(0, 200)}`);
+        }
+
+        const geminiData = (await geminiRes.json()) as any;
+        actionText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
       } catch (err) {
-        const msg = `Error calling Claude vision API: ${err instanceof Error ? err.message : String(err)}`;
+        const msg = `Error calling Gemini vision API: ${err instanceof Error ? err.message : String(err)}`;
         log.error(`[browser.computer_use] ${msg}`);
         steps.push(`Step ${step}: ${msg}`);
         break;

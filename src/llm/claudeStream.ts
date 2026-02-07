@@ -148,9 +148,11 @@ export function runClaudeStream(
   let accumulated = "";
   let lineBuffer = "";
 
+  // Strip ANTHROPIC_API_KEY so the CLI uses the Max plan, not the paid API
+  const { ANTHROPIC_API_KEY: _stripped, ...cliEnv } = process.env;
   proc = spawn(config.claudeBin, args, {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env },
+    env: cliEnv,
     shell: false,
   });
 

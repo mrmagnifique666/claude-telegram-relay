@@ -11,6 +11,7 @@
  */
 import { handleMessage } from "../orchestrator/router.js";
 import { getDb } from "../storage/store.js";
+import { clearTurns, clearSession } from "../storage/store.js";
 import { log } from "../utils/log.js";
 import { broadcast } from "../dashboard/broadcast.js";
 
@@ -28,8 +29,10 @@ export function getRateLimitReset(): number {
 }
 
 function detectRateLimit(text: string): boolean {
-  // Claude CLI returns "You've hit your limit · resets Xam/pm (TZ)"
-  if (!/hit your limit|rate.?limit/i.test(text)) return false;
+  // Claude CLI returns various rate limit messages:
+  // "You've hit your limit · resets Xam/pm (TZ)"
+  // "Credit balance is too low"
+  if (!/hit your limit|rate.?limit|credit balance is too low/i.test(text)) return false;
 
   // Try to parse the reset time from the message
   const match = text.match(/resets?\s+(\d{1,2})(am|pm)\s*\(([^)]+)\)/i);
@@ -304,6 +307,10 @@ export class Agent {
     this.status = "running";
     const startTime = Date.now();
     log.info(`[agent:${this.id}] Cycle ${this.cycle} — executing`);
+
+    // Fresh session every cycle — prevents context bloat from accumulated turns
+    clearTurns(this.chatId);
+    clearSession(this.chatId);
 
     try {
       // Prefix prompt with agent identity so Claude knows who it is

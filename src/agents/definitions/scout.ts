@@ -1,71 +1,82 @@
 /**
  * Scout Agent — autonomous prospecting and market intelligence.
- * 6-cycle rotation (30 min/cycle = 3h full rotation):
+ * 6-cycle rotation (4h/cycle = 24h full rotation):
  *   0: LinkedIn prospecting (courtiers Gatineau/Ottawa)
  *   1: Reddit pain point mining
- *   2: Twitter trends monitoring
- *   3: Competitive intelligence
- *   4: Lead qualification (review prospects)
- *   5: Veille sectorielle (immobilier, assurance)
- * Runs 24/7 — no quiet hours.
+ *   2: Competitive intelligence
+ *   3: Lead qualification (review prospects in CRM)
+ *   4: Veille sectorielle (immobilier, assurance)
+ *   5: Twitter/web trends monitoring
+ * Quiet hours: 22h-8h (no point searching at night).
+ * Each cycle: search → save to contacts/notes → log analytics.
+ * Only telegram.send when high-value finding (not every cycle).
  */
 import type { AgentConfig } from "../base.js";
 import { config } from "../../config/env.js";
 
+const TZ = "America/Toronto";
+
+function isQuietHours(): boolean {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    hour: "numeric",
+    hour12: false,
+  }).formatToParts(new Date());
+  const h = Number(parts.find((p) => p.type === "hour")!.value);
+  return h >= 22 || h < 8;
+}
+
 function buildScoutPrompt(cycle: number): string | null {
+  // Skip during quiet hours — web prospecting at night is pointless
+  if (isQuietHours()) return null;
+
   const rotation = cycle % 6;
 
   const prompts: Record<number, string> = {
     0: // LinkedIn Prospecting
-      `Cycle ${cycle} — LinkedIn Prospecting (courtiers Gatineau/Ottawa)\n\n` +
-      `1. Utilise web.search pour "courtier immobilier Gatineau 2026" ou "insurance broker Ottawa"\n` +
-      `2. Identifie 2-3 prospects potentiels (nom, entreprise, spécialité)\n` +
-      `3. Sauvegarde via contacts.add avec tags "prospect,linkedin,broker"\n` +
-      `4. Log via analytics.log(skill='scout.linkedin', outcome='success')\n` +
-      `5. Envoie un résumé concis (2-3 lignes) via telegram.send`,
+      `Tu es Scout, agent de prospection de Kingston.\n` +
+      `Mission: Trouve des courtiers immobiliers ou d'assurance à Gatineau/Ottawa.\n\n` +
+      `1. Utilise web.search pour "courtier immobilier Gatineau" ou "insurance broker Ottawa"\n` +
+      `2. Pour chaque prospect trouvé, sauvegarde via contacts.add avec tags "prospect,broker"\n` +
+      `3. Log via analytics.log(skill="scout.linkedin", outcome="success")\n` +
+      `4. Si tu trouves un prospect très prometteur, envoie un bref message via telegram.send`,
 
-    1: // Reddit Pain Point Mining
-      `Cycle ${cycle} — Reddit Pain Point Mining\n\n` +
-      `1. Utilise web.search pour "site:reddit.com real estate lead generation" ou "broker automation pain points"\n` +
-      `2. Identifie 1-2 posts avec des pain points pertinents pour Kingston\n` +
-      `3. Sauvegarde les insights dans notes.add avec tag "reddit-insight"\n` +
-      `4. Log via analytics.log(skill='scout.reddit', outcome='success')\n` +
-      `5. Envoie un résumé concis via telegram.send`,
+    1: // Reddit Pain Points
+      `Tu es Scout, agent de prospection de Kingston.\n` +
+      `Mission: Trouve des pain points de courtiers sur le web.\n\n` +
+      `1. Utilise web.search pour "real estate broker pain points automation" ou "courtier immobilier problèmes technologie"\n` +
+      `2. Sauvegarde les insights dans notes.add avec tag "reddit-insight"\n` +
+      `3. Log via analytics.log(skill="scout.reddit", outcome="success")`,
 
-    2: // Twitter Trends
-      `Cycle ${cycle} — Twitter Trends Monitoring\n\n` +
-      `1. Utilise web.search pour "twitter real estate AI trends 2026" ou "AI assistant broker news"\n` +
-      `2. Identifie 1-2 tendances ou discussions pertinentes\n` +
-      `3. Sauvegarde dans notes.add avec tag "twitter-trend"\n` +
-      `4. Log via analytics.log(skill='scout.twitter', outcome='success')\n` +
-      `5. Envoie un résumé concis via telegram.send`,
+    2: // Competitive Intelligence
+      `Tu es Scout, agent de prospection de Kingston.\n` +
+      `Mission: Veille concurrentielle — qui offre des services AI aux courtiers?\n\n` +
+      `1. Utilise web.search pour "AI answering service real estate" ou "assistant IA courtier immobilier"\n` +
+      `2. Sauvegarde les concurrents trouvés dans notes.add avec tag "veille-concurrentielle"\n` +
+      `3. Log via analytics.log(skill="scout.competitive", outcome="success")`,
 
-    3: // Competitive Intelligence
-      `Cycle ${cycle} — Competitive Intelligence\n\n` +
-      `1. Utilise web.search pour "AI answering service real estate 2026" ou "AI assistant broker competitors"\n` +
-      `2. Identifie 1-2 concurrents ou nouvelles offres sur le marché\n` +
-      `3. Sauvegarde dans notes.add avec tag "veille-concurrentielle"\n` +
-      `4. Log via analytics.log(skill='scout.competitive', outcome='success')\n` +
-      `5. Envoie un résumé concis via telegram.send`,
+    3: // Lead Qualification
+      `Tu es Scout, agent de prospection de Kingston.\n` +
+      `Mission: Évalue les prospects existants dans le CRM.\n\n` +
+      `1. Utilise contacts.list avec tag "prospect" pour voir les prospects récents\n` +
+      `2. Pour chaque prospect, évalue la pertinence (immobilier/assurance + Gatineau/Ottawa = bonus)\n` +
+      `3. Mets à jour les notes des contacts prometteurs via contacts.update\n` +
+      `4. Log via analytics.log(skill="scout.qualify", outcome="success")\n` +
+      `5. Si des prospects chauds identifiés, résume via telegram.send`,
 
-    4: // Lead Qualification
-      `Cycle ${cycle} — Lead Qualification (review prospects)\n\n` +
-      `1. Utilise contacts.search avec tag "prospect" pour lister les prospects récents\n` +
-      `2. Pour chaque prospect sans score, évalue la pertinence (1-10) basée sur:\n` +
-      `   - Secteur (immobilier/assurance = bonus)\n` +
-      `   - Région (Gatineau/Ottawa = bonus)\n` +
-      `   - Besoin potentiel d'automatisation\n` +
-      `3. Identifie les prospects à relancer (ajoutés il y a >3 jours sans follow-up)\n` +
-      `4. Log via analytics.log(skill='scout.qualify', outcome='success')\n` +
-      `5. Envoie un résumé concis via telegram.send avec recommandations`,
+    4: // Veille Sectorielle
+      `Tu es Scout, agent de prospection de Kingston.\n` +
+      `Mission: Veille sur le marché immobilier et assurance au Québec.\n\n` +
+      `1. Utilise web.search pour "marché immobilier Gatineau Ottawa 2026" ou "assurance courtier tendances Québec"\n` +
+      `2. Sauvegarde les actualités importantes dans notes.add avec tag "veille-sectorielle"\n` +
+      `3. Log via analytics.log(skill="scout.veille", outcome="success")`,
 
-    5: // Veille Sectorielle
-      `Cycle ${cycle} — Veille Sectorielle (immobilier + assurance)\n\n` +
-      `1. Utilise web.search pour "marché immobilier Gatineau Ottawa 2026" et "assurance courtier tendances"\n` +
-      `2. Identifie 1-2 actualités ou changements réglementaires pertinents\n` +
-      `3. Sauvegarde dans notes.add avec tag "veille-sectorielle"\n` +
-      `4. Log via analytics.log(skill='scout.veille', outcome='success')\n` +
-      `5. Envoie un résumé concis via telegram.send`,
+    5: // Web/Twitter Trends
+      `Tu es Scout, agent de prospection de Kingston.\n` +
+      `Mission: Surveille les tendances AI + immobilier sur le web.\n\n` +
+      `1. Utilise web.search pour "AI real estate trends 2026" ou "proptech innovation"\n` +
+      `2. Sauvegarde dans notes.add avec tag "trends"\n` +
+      `3. Log via analytics.log(skill="scout.trends", outcome="success")`,
   };
 
   return prompts[rotation] || null;

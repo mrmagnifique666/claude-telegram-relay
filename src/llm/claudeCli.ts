@@ -166,9 +166,11 @@ export async function runClaude(
 
     log.debug(`Spawning: ${config.claudeBin} ${args.join(" ")}`);
 
+    // Strip ANTHROPIC_API_KEY so the CLI uses the Max plan, not the paid API
+    const { ANTHROPIC_API_KEY: _stripped, ...cliEnv } = process.env;
     const proc = spawn(config.claudeBin, args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env },
+      env: cliEnv,
       shell: false,
     });
 
