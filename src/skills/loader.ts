@@ -137,6 +137,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/agents.js");
   await import("./builtin/git.js");
   await import("./builtin/memory-ops.js");
+  await import("./builtin/ftp.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
   log.info(`Loaded ${registry.size} built-in skills.`);
