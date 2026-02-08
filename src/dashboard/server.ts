@@ -4,16 +4,19 @@
  * No external dependencies — uses Node http + existing ws.
  */
 import http from "node:http";
+import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { getDb, clearSession, clearTurns } from "../storage/store.js";
 import { handleMessage } from "../orchestrator/router.js";
-import { config } from "../config/env.js";
-import { log } from "../utils/log.js";
+import { config, reloadEnv } from "../config/env.js";
+import { log, getRecentLogs, setLogBroadcast } from "../utils/log.js";
 import { listAgents } from "../agents/registry.js";
 import { isRateLimited, getRateLimitReset } from "../agents/base.js";
 import { addClient, broadcast, getClientCount } from "./broadcast.js";
+import { getAllSkills } from "../skills/loader.js";
+import { getMemoryStats } from "../memory/semantic.js";
 import {
   getAllPatterns,
   evaluateEffectiveness,
@@ -53,7 +56,10 @@ function checkAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean
   const token = config.dashboardToken;
   if (!token) return true; // no token configured = open (localhost-only anyway)
   const provided = req.headers["x-auth-token"] as string | undefined;
-  if (provided === token) return true;
+  const authHeader = req.headers["authorization"] as string | undefined;
+  const bearer = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const candidate = provided || bearer;
+  if (candidate === token) return true;
   sendJson(res, 401, { ok: false, error: "Unauthorized - missing or invalid X-Auth-Token" });
   return false;
 }
@@ -62,7 +68,7 @@ function checkAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean
 function sendJson(res: http.ServerResponse, status: number, data: unknown) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": `http://localhost:${PORT}`,
+    "Access-Control-Allow-Origin": "*",
   });
   res.end(JSON.stringify(data));
 }
@@ -227,6 +233,113 @@ function apiLearningInsights(): unknown {
   };
 }
 
+// ── New API Routes (dashboard redesign) ─────────────────────
+
+function apiSkills(): unknown {
+  const skills = getAllSkills();
+  return skills.map(s => ({
+    name: s.name,
+    description: s.description,
+    adminOnly: !!s.adminOnly,
+    args: Object.entries(s.argsSchema.properties).map(([key, val]) => ({
+      name: key,
+      type: val.type,
+      description: val.description || "",
+      required: s.argsSchema.required?.includes(key) || false,
+    })),
+  }));
+}
+
+function apiMemoryStats(): unknown {
+  try {
+    return getMemoryStats();
+  } catch {
+    return { total: 0, byCategory: {}, avgSalience: 0 };
+  }
+}
+
+function apiMemoryItems(limit = 50): unknown {
+  const db = getDb();
+  try {
+    return db
+      .prepare(`SELECT id, content, category, salience, access_count, created_at, last_accessed FROM memory_items ORDER BY salience DESC LIMIT ?`)
+      .all(limit);
+  } catch {
+    return [];
+  }
+}
+
+function apiConfig(): unknown {
+  // Return sanitized config — mask secrets
+  const secretKeys = new Set([
+    "telegramToken", "geminiApiKey", "anthropicApiKey", "twilioAuthToken",
+    "deepgramApiKey", "elevenlabsApiKey", "adminPassphrase", "braveSearchApiKey",
+    "dashboardToken",
+  ]);
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(config)) {
+    if (secretKeys.has(key) && typeof val === "string" && val.length > 0) {
+      result[key] = val.slice(0, 4) + "***";
+    } else {
+      result[key] = val;
+    }
+  }
+  return result;
+}
+
+function apiLogs(limit = 200): unknown {
+  return getRecentLogs(limit);
+}
+
+function apiSessions(): unknown {
+  const db = getDb();
+  try {
+    const sessions = db
+      .prepare(`SELECT chat_id, COUNT(*) as turns FROM turns GROUP BY chat_id ORDER BY chat_id`)
+      .all() as { chat_id: number; turns: number }[];
+    return sessions.map(s => ({
+      chatId: s.chat_id,
+      turns: s.turns,
+      label: s.chat_id === 1 ? "Scheduler" : s.chat_id === 2 ? "Dashboard Kingston" : s.chat_id === 3 ? "Dashboard Emile" :
+        s.chat_id >= 100 && s.chat_id <= 103 ? `Agent ${s.chat_id - 100}` : `User ${s.chat_id}`,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function apiSystem(): unknown {
+  const cpus = os.cpus();
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  return {
+    platform: os.platform(),
+    arch: os.arch(),
+    hostname: os.hostname(),
+    release: os.release(),
+    uptime: os.uptime(),
+    nodeVersion: process.version,
+    cpu: {
+      model: cpus[0]?.model || "unknown",
+      cores: cpus.length,
+    },
+    memory: {
+      total: Math.round(totalMem / 1048576),
+      free: Math.round(freeMem / 1048576),
+      used: Math.round((totalMem - freeMem) / 1048576),
+      percent: Math.round(((totalMem - freeMem) / totalMem) * 100),
+    },
+    process: {
+      pid: process.pid,
+      uptime: Math.round(process.uptime()),
+      memory: {
+        rss: Math.round(process.memoryUsage().rss / 1048576),
+        heap: Math.round(process.memoryUsage().heapUsed / 1048576),
+      },
+    },
+  };
+}
+
 // Dashboard has its own chatIds — separate from Telegram sessions
 const KINGSTON_DASHBOARD_ID = 2;
 const EMILE_DASHBOARD_ID = 3;
@@ -330,12 +443,12 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   const pathname = url.pathname;
   const method = req.method || "GET";
 
-  // CORS preflight — restrict to localhost only
+  // CORS preflight
   if (method === "OPTIONS") {
     res.writeHead(204, {
-      "Access-Control-Allow-Origin": `http://localhost:${PORT}`,
+      "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, X-Auth-Token",
+      "Access-Control-Allow-Headers": "Content-Type, X-Auth-Token, Authorization",
     });
     res.end();
     return;
@@ -367,6 +480,62 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     }
     if (pathname === "/api/learning" && method === "GET") {
       return json(res, apiLearningInsights());
+    }
+    // ── New endpoints ──
+    if (pathname === "/api/skills" && method === "GET") {
+      return json(res, apiSkills());
+    }
+    if (pathname === "/api/memory/stats" && method === "GET") {
+      return json(res, apiMemoryStats());
+    }
+    if (pathname === "/api/memory/items" && method === "GET") {
+      return json(res, apiMemoryItems());
+    }
+    if (pathname === "/api/config" && method === "GET") {
+      return json(res, apiConfig());
+    }
+    if (pathname === "/api/config" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      // Write non-secret key-value pairs to .env
+      const envPath = path.resolve(".env");
+      const secretKeys = new Set([
+        "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "TWILIO_AUTH_TOKEN",
+        "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY", "ADMIN_PASSPHRASE", "BRAVE_SEARCH_API_KEY",
+        "DASHBOARD_TOKEN", "FTP_PASSWORD",
+      ]);
+      const updates = body as Record<string, string>;
+      // Block secret updates via dashboard
+      for (const key of Object.keys(updates)) {
+        if (secretKeys.has(key)) {
+          return sendJson(res, 403, { ok: false, error: `Cannot update secret key: ${key}` });
+        }
+      }
+      try {
+        let envContent = fs.readFileSync(envPath, "utf-8");
+        for (const [key, value] of Object.entries(updates)) {
+          const regex = new RegExp(`^${key}=.*$`, "m");
+          if (regex.test(envContent)) {
+            envContent = envContent.replace(regex, `${key}=${value}`);
+          } else {
+            envContent += `\n${key}=${value}`;
+          }
+        }
+        fs.writeFileSync(envPath, envContent);
+        reloadEnv();
+        return json(res, { ok: true, message: "Config updated and reloaded" });
+      } catch (err) {
+        return sendJson(res, 500, { ok: false, error: (err as Error).message });
+      }
+    }
+    if (pathname === "/api/logs" && method === "GET") {
+      return json(res, apiLogs());
+    }
+    if (pathname === "/api/sessions" && method === "GET") {
+      return json(res, apiSessions());
+    }
+    if (pathname === "/api/system" && method === "GET") {
+      return json(res, apiSystem());
     }
     if (pathname === "/api/chat/reset" && method === "POST") {
       if (!checkAuth(req, res)) return;
@@ -434,6 +603,9 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
 // ── Start server ────────────────────────────────────────────
 export function startDashboard(): void {
+  // Wire log broadcast to push live logs via WebSocket
+  setLogBroadcast(broadcast);
+
   const server = http.createServer(handleRequest);
 
   // Handle port conflicts gracefully (noServer prevents WSS from re-throwing)
@@ -463,8 +635,9 @@ export function startDashboard(): void {
     }
   });
 
-  server.listen(PORT, "127.0.0.1", () => {
-    log.info(`[dashboard] UI available at http://localhost:${PORT} (localhost only)`);
+  const bindHost = process.env.DASHBOARD_BIND || "127.0.0.1";
+  server.listen(PORT, bindHost, () => {
+    log.info(`[dashboard] UI available at http://${bindHost === "0.0.0.0" ? "localhost" : bindHost}:${PORT}${bindHost === "0.0.0.0" ? " (all interfaces)" : " (localhost only)"}`);
   });
 }
 

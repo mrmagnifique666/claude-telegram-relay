@@ -9,6 +9,7 @@ import { getSkill, validateArgs } from "../skills/loader.js";
 import { runClaude } from "../llm/claudeCli.js";
 import { runClaudeStream, type StreamResult } from "../llm/claudeStream.js";
 import { runGemini, GeminiRateLimitError, GeminiSafetyError } from "../llm/gemini.js";
+import { runOllama } from "../llm/ollamaClient.js";
 import { addTurn, logError, getTurns, clearSession } from "../storage/store.js";
 import { autoCompact } from "./compaction.js";
 import { config } from "../config/env.js";
@@ -107,6 +108,33 @@ export async function handleMessage(
   const tier = selectModel(userMessage, contextHint);
   const model = getModelId(tier);
 
+  // --- Ollama path (trivial tasks — no tool chaining) ---
+  if (tier === "ollama") {
+    try {
+      const ollamaResult = await runOllama(chatId, userMessage);
+      addTurn(chatId, { role: "assistant", content: ollamaResult.text });
+      backgroundExtract(chatId, userMessage, ollamaResult.text);
+      return ollamaResult.text;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log.warn(`[router] Ollama failed, falling back to Haiku: ${errMsg}`);
+      // Fallback to Haiku
+      const haikuModel = getModelId("haiku");
+      log.info(`[router] ${modelLabel("haiku")} Fallback from Ollama (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
+      let haikuResult = await runClaude(chatId, userMessage, userIsAdmin, haikuModel);
+      if (haikuResult.type === "message") {
+        const text = haikuResult.text?.trim() || "Désolé, je n'ai pas pu répondre.";
+        addTurn(chatId, { role: "assistant", content: text });
+        backgroundExtract(chatId, userMessage, text);
+        return text;
+      }
+      // If Haiku returns a tool_call on what should be trivial, just acknowledge
+      const text = "Salut! Comment je peux t'aider?";
+      addTurn(chatId, { role: "assistant", content: text });
+      return text;
+    }
+  }
+
   // First pass: Claude
   log.info(`[router] ${modelLabel(tier)} Sending to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
   let result = await runClaude(chatId, userMessage, userIsAdmin, model);
@@ -136,8 +164,8 @@ export async function handleMessage(
     }
   }
 
-  // Tool chaining loop — use haiku for follow-ups (faster, sufficient for tool routing)
-  const followUpModel = getModelId("haiku");
+  // Tool chaining loop — use sonnet for follow-ups (keeps intelligence + personality)
+  const followUpModel = getModelId("sonnet");
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
 
@@ -381,6 +409,32 @@ export async function handleMessageStreaming(
   const tier = selectModel(userMessage, "user");
   const model = getModelId(tier);
 
+  // --- Ollama path (trivial tasks — no tool chaining, no streaming needed) ---
+  if (tier === "ollama") {
+    try {
+      const ollamaResult = await runOllama(chatId, userMessage);
+      await draft.update(ollamaResult.text);
+      await draft.finalize();
+      addTurn(chatId, { role: "assistant", content: ollamaResult.text });
+      backgroundExtract(chatId, userMessage, ollamaResult.text);
+      return ollamaResult.text;
+    } catch (err) {
+      log.warn(`[router-stream] Ollama failed, falling back to Haiku: ${err instanceof Error ? err.message : String(err)}`);
+      await draft.cancel();
+      const haikuModel = getModelId("haiku");
+      const haikuResult = await runClaude(chatId, userMessage, userIsAdmin, haikuModel);
+      if (haikuResult.type === "message") {
+        const text = haikuResult.text?.trim() || "Désolé, je n'ai pas pu répondre.";
+        addTurn(chatId, { role: "assistant", content: text });
+        backgroundExtract(chatId, userMessage, text);
+        return text;
+      }
+      const text = "Salut! Comment je peux t'aider?";
+      addTurn(chatId, { role: "assistant", content: text });
+      return text;
+    }
+  }
+
   log.info(`[router] ${modelLabel(tier)} Streaming to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
 
   // First pass: try streaming (with safety timeout to prevent hanging)
@@ -450,8 +504,8 @@ export async function handleMessageStreaming(
     session_id: streamResult.session_id,
   };
 
-  // Tool chaining loop (batch mode, sonnet for better reasoning)
-  const streamFollowUpModel = getModelId("haiku");
+  // Tool chaining loop — sonnet for follow-ups (keeps intelligence + personality)
+  const streamFollowUpModel = getModelId("sonnet");
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
 

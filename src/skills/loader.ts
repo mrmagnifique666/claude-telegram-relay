@@ -39,6 +39,7 @@ export function getAllSkills(): Skill[] {
 
 /**
  * Validate args against a simple JSON schema (top-level properties + required).
+ * Auto-coerces types when safe (e.g. "10" → 10 for number fields).
  */
 export function validateArgs(
   args: Record<string, unknown>,
@@ -54,6 +55,23 @@ export function validateArgs(
   for (const [key, val] of Object.entries(args)) {
     const prop = schema.properties[key];
     if (!prop) continue; // extra keys are ignored
+
+    // Auto-coerce string → number when schema expects number
+    if (prop.type === "number" && typeof val === "string") {
+      const num = Number(val);
+      if (!Number.isNaN(num)) {
+        args[key] = num;
+        continue;
+      }
+      return `Argument "${key}" must be a number (got "${val}")`;
+    }
+
+    // Auto-coerce number → string when schema expects string
+    if (prop.type === "string" && typeof val === "number") {
+      args[key] = String(val);
+      continue;
+    }
+
     if (prop.type === "string" && typeof val !== "string") {
       return `Argument "${key}" must be a string`;
     }
@@ -277,6 +295,16 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/ftp.js");
   await import("./builtin/office.js");
   await import("./builtin/desktop.js");
+  await import("./builtin/system-control.js");
+  await import("./builtin/app-control.js");
+  await import("./builtin/files-power.js");
+  await import("./builtin/package-manager.js");
+  await import("./builtin/pdf.js");
+  await import("./builtin/image-ops.js");
+  await import("./builtin/ollama.js");
+  await import("./builtin/tunnel.js");
+  await import("./builtin/clipboard.js");
+  await import("./builtin/power-tools.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
   await import("./custom/openweather.js");

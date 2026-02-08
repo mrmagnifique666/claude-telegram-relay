@@ -32,7 +32,8 @@ function csvList(key: string, fallback: string = ""): string[] {
 function buildConfig() {
   const relayDir = optional("RELAY_DIR", "./relay");
   return {
-    telegramToken: required("TELEGRAM_BOT_TOKEN"),
+    telegramToken: optional("TELEGRAM_BOT_TOKEN", ""),
+    telegramEnabled: optional("TELEGRAM_ENABLED", "true") === "true",
     allowedUsers: csvList("TELEGRAM_ALLOWED_USERS").map(Number),
     adminChatId: Number(optional("TELEGRAM_ADMIN_CHAT_ID", "0")),
     sandboxDir: optional("SANDBOX_DIR", "./sandbox"),
@@ -100,6 +101,11 @@ function buildConfig() {
 
     // Dashboard
     dashboardToken: optional("DASHBOARD_TOKEN", ""),
+
+    // Ollama (local LLM tier)
+    ollamaEnabled: optional("OLLAMA_ENABLED", "false") === "true",
+    ollamaModel: optional("OLLAMA_MODEL", "qwen2.5:14b"),
+    ollamaUrl: optional("OLLAMA_URL", "http://localhost:11434"),
 
     // Tool profiles (OpenClaw-like): "default" | "coding" | "automation" | "full"
     toolProfile: optional("TOOL_PROFILE", "full") as "default" | "coding" | "automation" | "full",

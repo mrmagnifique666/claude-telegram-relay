@@ -17,6 +17,7 @@ import { startScheduler, stopScheduler } from "./scheduler/scheduler.js";
 import { startAgents, shutdownAgents } from "./agents/startup.js";
 import { cleanupDatabase } from "./storage/store.js";
 import { startDashboard } from "./dashboard/server.js";
+import { isOllamaAvailable } from "./llm/ollamaClient.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -149,6 +150,14 @@ async function main() {
   // Load skills
   await loadBuiltinSkills();
 
+  // Ollama health check (non-blocking)
+  if (config.ollamaEnabled) {
+    isOllamaAvailable().then(ok => {
+      if (ok) log.info(`[ollama] 🦙 Ollama available (${config.ollamaModel} at ${config.ollamaUrl})`);
+      else log.warn(`[ollama] Ollama not reachable at ${config.ollamaUrl} — will fallback to Haiku`);
+    });
+  }
+
   // Migrate notes to semantic memory (one-time, non-blocking)
   migrateNotesToMemories().catch(err =>
     log.warn(`[semantic] Migration failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -160,28 +169,54 @@ async function main() {
   // Cleanup stale database entries on startup
   cleanupDatabase();
 
-  // Start voice server (before bot.start() which blocks)
-  startVoiceServer();
+  // Start local dashboard UI first so we always have a control plane.
+  try {
+    startDashboard();
+  } catch (err) {
+    log.error(`[dashboard] Failed to start: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
-  // Start scheduler with its own chatId (1) to avoid polluting Nicolas's CLI session
-  // userId stays as Nicolas's so telegram.send reaches him
-  startScheduler(1, config.voiceUserId);
+  // Non-critical services should never prevent dashboard access.
+  try {
+    startVoiceServer();
+  } catch (err) {
+    log.warn(`[voice] Disabled due to startup error: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
-  // Start autonomous agents
-  startAgents();
+  try {
+    // Start scheduler with its own chatId (1) to avoid polluting Nicolas's CLI session
+    // userId stays as Nicolas's so telegram.send reaches him
+    startScheduler(1, config.voiceUserId);
+  } catch (err) {
+    log.warn(`[scheduler] Disabled due to startup error: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
-  // Start local dashboard UI
-  startDashboard();
+  try {
+    startAgents();
+  } catch (err) {
+    log.warn(`[agents] Disabled due to startup error: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
-  // Create and start Telegram bot (long polling)
-  const bot = createBot();
+  const telegramEnabled = config.telegramEnabled && !!config.telegramToken;
+  if (!telegramEnabled) {
+    log.warn("[telegram] Disabled (TELEGRAM_ENABLED=false or TELEGRAM_BOT_TOKEN missing). Dashboard remains available.");
+    return;
+  }
 
-  log.info("Starting Telegram long polling...");
-  await bot.start({
-    onStart: (botInfo) => {
-      log.info(`Bot online as @${botInfo.username} (id: ${botInfo.id})`);
-    },
-  });
+  // Create and start Telegram bot (long polling). Keep it non-fatal for dashboard mode.
+  try {
+    const bot = createBot();
+    log.info("Starting Telegram long polling...");
+    void bot.start({
+      onStart: (botInfo) => {
+        log.info(`Bot online as @${botInfo.username} (id: ${botInfo.id})`);
+      },
+    }).catch((err) => {
+      log.error(`[telegram] Long polling stopped: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  } catch (err) {
+    log.error(`[telegram] Failed to start: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 main().catch((err) => {

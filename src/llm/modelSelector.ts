@@ -1,18 +1,20 @@
 /**
- * Model selector — picks the right Claude model tier based on task context.
+ * Model selector — picks the right model tier based on task context.
  *
  * Tiers:
- *   haiku  — fast, cheap: greetings, acks, simple routing, tool chain follow-ups
- *   sonnet — balanced: most interactions, analysis, tool chains
+ *   ollama — local: heartbeats, greetings, trivial status checks (free, instant)
+ *   haiku  — fast: agent tasks, simple routing
+ *   sonnet — balanced: most interactions, analysis, tool chain follow-ups
  *   opus   — premium: content creation, strategic thinking, complex reasoning
  */
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 
-export type ModelTier = "haiku" | "sonnet" | "opus";
+export type ModelTier = "ollama" | "haiku" | "sonnet" | "opus";
 
 export function getModelId(tier: ModelTier): string {
   switch (tier) {
+    case "ollama": return config.ollamaModel;
     case "haiku": return config.claudeModelHaiku;
     case "sonnet": return config.claudeModelSonnet;
     case "opus": return config.claudeModelOpus;
@@ -26,8 +28,8 @@ export function selectModel(
   message: string,
   context: "user" | "scheduler" | "tool_followup" = "user"
 ): ModelTier {
-  // Explicit override: [MODEL:opus], [MODEL:haiku], [MODEL:sonnet]
-  const override = message.match(/\[MODEL:(haiku|sonnet|opus)\]/i);
+  // Explicit override: [MODEL:opus], [MODEL:haiku], [MODEL:sonnet], [MODEL:ollama]
+  const override = message.match(/\[MODEL:(ollama|haiku|sonnet|opus)\]/i);
   if (override) {
     const tier = override[1].toLowerCase() as ModelTier;
     log.debug(`[model] Explicit override: ${tier}`);
@@ -39,18 +41,33 @@ export function selectModel(
     return "sonnet";
   }
 
-  // Agent tasks — default haiku, sonnet for synthesis/deep analysis
+  // Agent tasks
   if (message.startsWith("[AGENT:")) {
     if (/weekly.*deep.*dive|alpha.*report|proactive.*fix|effectiveness.*review/i.test(message)) return "sonnet";
+    // Agent heartbeats → ollama if enabled
+    if (config.ollamaEnabled && /heartbeat|status.*check|ping/i.test(message)) {
+      log.debug(`[model] Agent heartbeat → ollama`);
+      return "ollama";
+    }
     return "haiku";
   }
 
   // Scheduler events
   if (context === "scheduler" || message.startsWith("[SCHEDULER]") || message.startsWith("[HEARTBEAT")) {
-    // Heartbeat checks, stability, digests → haiku (simple checks)
-    if (/heartbeat|stability|digest/i.test(message)) return "haiku";
-    // Briefings → sonnet
+    // Heartbeat checks, stability → ollama if enabled
+    if (config.ollamaEnabled && /heartbeat|stability/i.test(message)) {
+      log.debug(`[model] Scheduler heartbeat → ollama`);
+      return "ollama";
+    }
+    if (/digest/i.test(message)) return "haiku";
     return "sonnet";
+  }
+
+  // Very short greetings → ollama if enabled (< 40 chars, simple pattern)
+  const greetingPatterns = /^(bonjour|salut|hey|hi|ok|merci|thanks|ça va|parfait|super|cool|bye|bonne nuit|good)\s*[!.?]?\s*$/i;
+  if (config.ollamaEnabled && greetingPatterns.test(message.trim()) && message.length < 40) {
+    log.debug(`[model] Short greeting → ollama`);
+    return "ollama";
   }
 
   // Simple/short messages → sonnet (still capable but faster than opus)
@@ -76,10 +93,11 @@ export function selectModel(
  * Get a human-readable label for logging.
  */
 export function modelLabel(tier: ModelTier): string {
-  const costs: Record<ModelTier, string> = {
+  const labels: Record<ModelTier, string> = {
+    ollama: "🦙",
     haiku: "💨",
     sonnet: "🎵",
     opus: "🎼",
   };
-  return `${costs[tier]} ${tier}`;
+  return `${labels[tier]} ${tier}`;
 }
