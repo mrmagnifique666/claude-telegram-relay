@@ -83,7 +83,9 @@ function buildLearnerPrompt(cycle: number): string | null {
   const AGENT_RULES =
     `RÈGLES STRICTES:\n` +
     `- INTERDIT: N'utilise JAMAIS browser.* — ça ouvre Chrome sur l'écran de Nicolas.\n` +
-    `- Utilise UNIQUEMENT: notes.*, analytics.*, files.read, system.*, telegram.send\n\n`;
+    `- Utilise UNIQUEMENT: notes.*, analytics.*, files.read, system.*\n` +
+    `- NE CRÉE PAS de note si le système est stable et qu'il n'y a rien à signaler.\n` +
+    `- Crée une note UNIQUEMENT si tu as un finding actionnable (nouveau pattern, fix proposé, anomalie).\n\n`;
 
   if (rotation === 0) {
     // Error cluster analysis
@@ -94,6 +96,12 @@ function buildLearnerPrompt(cycle: number): string | null {
     const pendingCount = patterns.filter(
       (p) => !p.graduated && p.count >= 3,
     ).length;
+
+    // Skip cycle if no errors and no patterns near graduation — nothing to analyze
+    if (errors === "Aucune erreur non résolue." && pendingCount === 0) {
+      log.debug(`[learner] Cycle ${cycle} skipped — no errors, no pending patterns`);
+      return null;
+    }
 
     return (
       `Cycle ${cycle} — Error Cluster Analysis\n\n` +
@@ -107,7 +115,7 @@ function buildLearnerPrompt(cycle: number): string | null {
       `2. Si tu identifies un pattern récurrent, utilise notes.add pour documenter le pattern\n` +
       `3. Si des erreurs sont des duplicatas de patterns déjà gradués, elles seront auto-résolues\n` +
       `4. Log via analytics.log(skill='learner.cluster', outcome='success')\n` +
-      `5. Envoie un résumé concis (3-5 lignes) via telegram.send avec les findings`
+      `5. Sauvegarde un résumé concis (3-5 lignes) dans notes.add avec tag [LEARNER-CYCLE0] pour que Nicolas le découvre`
     );
   }
 
@@ -123,7 +131,7 @@ function buildLearnerPrompt(cycle: number): string | null {
         `1. Liste les error patterns via system.patterns\n` +
         `2. Si des patterns ont 3-4 occurrences, note les dans notes.add pour suivi\n` +
         `3. Log via analytics.log(skill='learner.effectiveness', outcome='success')\n` +
-        `4. Envoie un résumé court via telegram.send`
+        `4. Sauvegarde un résumé court dans notes.add avec tag [LEARNER-CYCLE1]`
       );
     }
 
@@ -153,7 +161,7 @@ function buildLearnerPrompt(cycle: number): string | null {
       `1. Analyse le rapport ci-dessus\n` +
       `2. Pour les règles inefficaces, propose une meilleure formulation dans notes.add\n` +
       `3. Log via analytics.log(skill='learner.effectiveness', outcome='success')\n` +
-      `4. Envoie un résumé concis via telegram.send avec recommendations`
+      `4. Sauvegarde un résumé concis dans notes.add avec tag [LEARNER-CYCLE1] et recommendations`
     );
   }
 
@@ -183,6 +191,12 @@ function buildLearnerPrompt(cycle: number): string | null {
           .join("\n")
       : "Aucun pattern récurrent non gradué.";
 
+  // Skip cycle if no trends and no recurring patterns — nothing to propose
+  if (trends.length === 0 && recurring.length === 0) {
+    log.debug(`[learner] Cycle ${cycle} skipped — no trends, no recurring patterns`);
+    return null;
+  }
+
   return (
     `Cycle ${cycle} — Proactive Fix Proposals\n\n` +
     `Tu es l'agent Learner. Propose des améliorations préventives.\n` +
@@ -194,7 +208,7 @@ function buildLearnerPrompt(cycle: number): string | null {
     `2. Si tu détectes un problème systémique, propose une solution dans notes.add\n` +
     `3. Si approprié, utilise files.read pour lire le code source pertinent et comprendre la root cause\n` +
     `4. Log via analytics.log(skill='learner.proactive', outcome='success')\n` +
-    `5. Envoie un résumé concis via telegram.send avec proposals concrètes`
+    `5. Sauvegarde un résumé concis dans notes.add avec tag [LEARNER-CYCLE2] et proposals concrètes`
   );
 }
 
@@ -205,7 +219,7 @@ export function createLearnerConfig(): AgentConfig {
     role: "Error analysis and self-improvement agent",
     heartbeatMs: config.agentLearnerHeartbeatMs,
     enabled: config.agentLearnerEnabled,
-    chatId: 102, // Dedicated chatId — agents must NOT share Nicolas's Telegram chatId
+    chatId: 102, // Session isolation ID — router rewrites to adminChatId for telegram.send
     userId: config.voiceUserId,
     buildPrompt: buildLearnerPrompt,
     cycleCount: 3,
