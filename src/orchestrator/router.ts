@@ -8,16 +8,27 @@ import { isAdmin } from "../security/policy.js";
 import { getSkill, validateArgs } from "../skills/loader.js";
 import { runClaude } from "../llm/claudeCli.js";
 import { runClaudeStream, type StreamResult } from "../llm/claudeStream.js";
+import { runGemini, GeminiRateLimitError, GeminiSafetyError } from "../llm/gemini.js";
 import { addTurn, logError } from "../storage/store.js";
 import { autoCompact } from "./compaction.js";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
+import { extractAndStoreMemories } from "../memory/semantic.js";
 import { selectModel, getModelId, modelLabel, type ModelTier } from "../llm/modelSelector.js";
 import type { DraftController } from "../bot/draftMessage.js";
 
 /**
  * Callback to send intermediate progress updates to the user.
  */
+/** Fire-and-forget background memory extraction — adds no latency */
+function backgroundExtract(chatId: number, userMessage: string, assistantResponse: string): void {
+  // Only extract for real user chats, not agents/scheduler/dashboard
+  if (chatId <= 1000) return;
+  extractAndStoreMemories(chatId, `User: ${userMessage}\nAssistant: ${assistantResponse}`)
+    .then(count => { if (count > 0) log.debug(`[memory] Extracted ${count} new memories`); })
+    .catch(err => log.debug(`[memory] Extraction failed: ${err instanceof Error ? err.message : String(err)}`));
+}
+
 export let progressCallback: ((chatId: number, message: string) => Promise<void>) | null = null;
 
 export function setProgressCallback(cb: (chatId: number, message: string) => Promise<void>) {
@@ -34,12 +45,20 @@ async function safeProgress(chatId: number, message: string): Promise<void> {
   }
 }
 
+/** Check if Gemini should be used for this request */
+function shouldUseGemini(chatId: number): boolean {
+  // Must be enabled and have API key
+  if (!config.geminiOrchestratorEnabled || !config.geminiApiKey) return false;
+  // Agents (chatId 100-103) always use Claude CLI to preserve Gemini rate limit for user
+  if (chatId >= 100 && chatId <= 103) return false;
+  return true;
+}
+
 /**
  * Handle a user message end-to-end:
- * 1. Send to Claude
- * 2. If Claude returns a tool call, validate & execute it
- * 3. Feed tool result back to Claude — repeat up to maxToolChain times
- * 4. Store turns and return the final text
+ * 1. Try Gemini (if enabled) — handles tool chain internally
+ * 2. On Gemini failure, fall back to Claude CLI with manual tool chain
+ * 3. Store turns and return the final text
  */
 export async function handleMessage(
   chatId: number,
@@ -49,12 +68,35 @@ export async function handleMessage(
 ): Promise<string> {
   const userIsAdmin = isAdmin(userId);
 
+  // Store user turn
+  addTurn(chatId, { role: "user", content: userMessage });
+
+  // --- Gemini path (primary) ---
+  if (shouldUseGemini(chatId)) {
+    try {
+      log.info(`[router] Gemini: sending message (chatId=${chatId}, admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
+      const geminiResult = await runGemini({
+        chatId,
+        userMessage,
+        isAdmin: userIsAdmin,
+        userId,
+        onToolProgress: async (cid, msg) => safeProgress(cid, msg),
+      });
+      addTurn(chatId, { role: "assistant", content: geminiResult });
+      backgroundExtract(chatId, userMessage, geminiResult);
+      log.info(`[router] Gemini success (${geminiResult.length} chars)`);
+      return geminiResult;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log.warn(`[router] Gemini failed, falling back to Claude CLI: ${errMsg}`);
+      logError(err instanceof Error ? err : errMsg, "router:gemini_fallback");
+    }
+  }
+
+  // --- Claude CLI path (fallback or agents) ---
   // Select model tier based on message content
   const tier = selectModel(userMessage, contextHint);
   const model = getModelId(tier);
-
-  // Store user turn
-  addTurn(chatId, { role: "user", content: userMessage });
 
   // First pass: Claude
   log.info(`[router] ${modelLabel(tier)} Sending to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
@@ -62,8 +104,13 @@ export async function handleMessage(
   log.info(`[router] Claude responded with type: ${result.type}`);
 
   if (result.type === "message") {
-    addTurn(chatId, { role: "assistant", content: result.text });
-    return result.text;
+    // Guard against empty or error-literal responses
+    const text = result.text && result.text.trim() && !result.text.includes("(Claude returned an empty response)")
+      ? result.text
+      : "Désolé, je n'ai pas pu générer de réponse. Réessaie.";
+    addTurn(chatId, { role: "assistant", content: text });
+    backgroundExtract(chatId, userMessage, text);
+    return text;
   }
 
   // Tool chaining loop — use sonnet for follow-ups (better reasoning, $0 on Max plan)
@@ -103,6 +150,13 @@ export async function handleMessage(
     if ((tool.startsWith("telegram.") || tool.startsWith("browser.")) && !safeArgs.chatId) {
       safeArgs.chatId = String(chatId);
       log.debug(`[router] Auto-injected chatId=${chatId} for ${tool}`);
+    }
+
+    // Agent chatId fix: agents use fake chatIds (100-103) for session isolation.
+    // When they call telegram.send/voice, replace with the real admin chatId.
+    if (chatId >= 100 && chatId <= 103 && tool.startsWith("telegram.") && config.adminChatId > 0) {
+      safeArgs.chatId = String(config.adminChatId);
+      log.debug(`[router] Agent ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${tool}`);
     }
 
     // Hard block: agents (chatId 100-103) cannot use browser.* tools — they open visible windows
@@ -205,6 +259,7 @@ export async function handleMessage(
     // If Claude responds with a message, we're done
     if (result.type === "message") {
       addTurn(chatId, { role: "assistant", content: result.text });
+      backgroundExtract(chatId, userMessage, result.text);
       return result.text;
     }
 
@@ -229,9 +284,8 @@ export async function handleMessage(
 
 /**
  * Handle a user message with streaming output.
- * The final text response is streamed to the draft controller in real-time.
- * Tool calls during streaming suppress the draft and execute normally.
- * Only the final response is streamed — intermediate tool chain steps use batch mode.
+ * Tries Gemini first (batch mode — no streaming with function calling),
+ * then falls back to Claude CLI streaming on failure.
  */
 export async function handleMessageStreaming(
   chatId: number,
@@ -241,28 +295,83 @@ export async function handleMessageStreaming(
 ): Promise<string> {
   const userIsAdmin = isAdmin(userId);
 
+  addTurn(chatId, { role: "user", content: userMessage });
+
+  // --- Gemini path (batch mode — Gemini doesn't support streaming + function calling) ---
+  if (shouldUseGemini(chatId)) {
+    try {
+      log.info(`[router-stream] Gemini: sending message (chatId=${chatId}): ${userMessage.slice(0, 100)}...`);
+      const geminiResult = await runGemini({
+        chatId,
+        userMessage,
+        isAdmin: userIsAdmin,
+        userId,
+        onToolProgress: async (cid, msg) => safeProgress(cid, msg),
+      });
+      // Update draft with final text and finalize
+      await draft.update(geminiResult);
+      await draft.finalize();
+      addTurn(chatId, { role: "assistant", content: geminiResult });
+      backgroundExtract(chatId, userMessage, geminiResult);
+      log.info(`[router-stream] Gemini success (${geminiResult.length} chars)`);
+      return geminiResult;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log.warn(`[router-stream] Gemini failed, falling back to Claude CLI streaming: ${errMsg}`);
+      logError(err instanceof Error ? err : errMsg, "router:gemini_stream_fallback");
+      // Cancel any partial draft from Gemini attempt
+      await draft.cancel();
+    }
+  }
+
+  // --- Claude CLI streaming path (fallback or agents) ---
   // Select model tier based on message content
   const tier = selectModel(userMessage, "user");
   const model = getModelId(tier);
 
-  addTurn(chatId, { role: "user", content: userMessage });
-
   log.info(`[router] ${modelLabel(tier)} Streaming to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
 
   // First pass: try streaming (with safety timeout to prevent hanging)
-  const streamPromise = runClaudeStreamAsync(chatId, userMessage, userIsAdmin, draft, model);
-  const safetyTimeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("Stream response safety timeout")), config.cliTimeoutMs + 10000)
-  );
-  const streamResult = await Promise.race([streamPromise, safetyTimeout]);
+  let streamResult: StreamResult;
+  try {
+    const streamPromise = runClaudeStreamAsync(chatId, userMessage, userIsAdmin, draft, model);
+    const safetyTimeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Stream response safety timeout")), config.cliTimeoutMs + 10_000)
+    );
+    streamResult = await Promise.race([streamPromise, safetyTimeout]);
+  } catch (streamErr) {
+    // Streaming failed (empty response, timeout, process crash) — fall back to batch mode
+    log.warn(`[router-stream] Stream failed: ${streamErr instanceof Error ? streamErr.message : String(streamErr)} — falling back to batch`);
+    await draft.cancel();
+    const batchResponse = await runClaude(chatId, userMessage, userIsAdmin, model);
+    if (batchResponse.type === "message") {
+      const text = batchResponse.text && batchResponse.text.trim() ? batchResponse.text : "Désolé, je n'ai pas pu générer de réponse. Réessaie.";
+      addTurn(chatId, { role: "assistant", content: text });
+      backgroundExtract(chatId, userMessage, text);
+      return text;
+    }
+    // If batch also returned a tool call, process it below
+    streamResult = {
+      text: batchResponse.text || "",
+      session_id: batchResponse.session_id,
+      is_tool_call: batchResponse.type === "tool_call",
+      tool: batchResponse.tool,
+      args: batchResponse.args,
+    };
+  }
   log.info(`[router-stream] Stream completed: is_tool_call=${streamResult.is_tool_call}, text=${streamResult.text.length} chars, tool=${streamResult.tool || "none"}`);
 
   // If it's a plain text response, we're done (draft already has the content)
   if (!streamResult.is_tool_call) {
-    addTurn(chatId, { role: "assistant", content: streamResult.text });
+    // Guard against empty responses sneaking through
+    const responseText = streamResult.text && streamResult.text.trim()
+      ? streamResult.text
+      : "Désolé, je n'ai pas pu générer de réponse. Réessaie.";
+    addTurn(chatId, { role: "assistant", content: responseText });
     await draft.finalize();
-    log.info(`[router-stream] Returning plain text (${streamResult.text.length} chars)`);
-    return streamResult.text;
+    backgroundExtract(chatId, userMessage, responseText);
+    log.info(`[router-stream] Returning plain text (${responseText.length} chars)`);
+    return responseText;
   }
 
   // It's a tool call — cancel the draft and process the tool chain in batch mode
@@ -302,6 +411,12 @@ export async function handleMessageStreaming(
     }
     if ((tool.startsWith("telegram.") || tool.startsWith("browser.")) && !safeArgs.chatId) {
       safeArgs.chatId = String(chatId);
+    }
+
+    // Agent chatId fix: rewrite fake agent chatIds to real admin chatId for telegram.*
+    if (chatId >= 100 && chatId <= 103 && tool.startsWith("telegram.") && config.adminChatId) {
+      safeArgs.chatId = String(config.adminChatId);
+      log.debug(`[router-stream] Agent ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${tool}`);
     }
 
     // Hard block: agents (chatId 100-103) cannot use browser.* tools
@@ -383,6 +498,7 @@ export async function handleMessageStreaming(
     const batchResult = await runClaude(chatId, followUp, userIsAdmin, streamFollowUpModel);
     if (batchResult.type === "message") {
       addTurn(chatId, { role: "assistant", content: batchResult.text });
+      backgroundExtract(chatId, userMessage, batchResult.text);
       return batchResult.text;
     }
     result = batchResultToRouterResult(batchResult);
@@ -408,12 +524,18 @@ function runClaudeStreamAsync(
   modelOverride?: string
 ): Promise<StreamResult> {
   return new Promise<StreamResult>((resolve, reject) => {
+    let draftSuppressed = false;
     runClaudeStream(chatId, userMessage, isAdminUser, {
       onDelta(text: string) {
-        // Only update draft if it doesn't look like a tool call
-        if (!text.trimStart().startsWith('{"type":"tool_call"')) {
-          draft.update(text).catch(() => {});
+        if (draftSuppressed) return;
+        // Detect tool_call JSON appearing anywhere in the stream
+        // If found, cancel the draft immediately — this is thinking text, not a real response
+        if (text.includes('{"type":"tool_call"')) {
+          draftSuppressed = true;
+          draft.cancel().catch(() => {});
+          return;
         }
+        draft.update(text).catch(() => {});
       },
       onComplete(result: StreamResult) {
         resolve(result);
