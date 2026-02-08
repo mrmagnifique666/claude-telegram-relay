@@ -95,6 +95,21 @@ export async function handleMessage(
       log.debug(`[router] Auto-injected chatId=${chatId} for ${tool}`);
     }
 
+    // Hard block: agents (chatId 100-103) cannot use browser.* tools — they open visible windows
+    if (chatId >= 100 && chatId <= 103 && tool.startsWith("browser.")) {
+      const msg = `Tool "${tool}" is blocked for agents — use web.search instead.`;
+      log.warn(`[router] Agent chatId=${chatId} tried to call ${tool} — blocked`);
+      const followUp = `[Tool "${tool}" error]:\n${msg}`;
+      addTurn(chatId, { role: "assistant", content: `[blocked ${tool}]` });
+      addTurn(chatId, { role: "user", content: followUp });
+      result = await runClaude(chatId, followUp, userIsAdmin, followUpModel);
+      if (result.type === "message") {
+        addTurn(chatId, { role: "assistant", content: result.text });
+        return result.text;
+      }
+      continue;
+    }
+
     // Security: check allowlist + admin — hard block, no retry
     if (!isToolPermitted(tool, userId)) {
       const msg = tool
@@ -285,6 +300,22 @@ export async function handleMessageStreaming(
     }
     if ((tool.startsWith("telegram.") || tool.startsWith("browser.")) && !safeArgs.chatId) {
       safeArgs.chatId = String(chatId);
+    }
+
+    // Hard block: agents (chatId 100-103) cannot use browser.* tools
+    if (chatId >= 100 && chatId <= 103 && tool.startsWith("browser.")) {
+      const msg = `Tool "${tool}" is blocked for agents — use web.search instead.`;
+      log.warn(`[router] Agent chatId=${chatId} tried to call ${tool} — blocked`);
+      const followUp = `[Tool "${tool}" error]:\n${msg}`;
+      addTurn(chatId, { role: "assistant", content: `[blocked ${tool}]` });
+      addTurn(chatId, { role: "user", content: followUp });
+      const batchResult = await runClaude(chatId, followUp, userIsAdmin, streamFollowUpModel);
+      if (batchResult.type === "message") {
+        addTurn(chatId, { role: "assistant", content: batchResult.text });
+        return batchResult.text;
+      }
+      result = batchResultToRouterResult(batchResult);
+      continue;
     }
 
     if (!isToolPermitted(tool, userId)) {

@@ -80,6 +80,11 @@ function buildLearnerPrompt(cycle: number): string | null {
   const hour = new Date().getHours();
   if (hour >= 23 || hour < 7) return null;
 
+  const AGENT_RULES =
+    `RÈGLES STRICTES:\n` +
+    `- INTERDIT: N'utilise JAMAIS browser.* — ça ouvre Chrome sur l'écran de Nicolas.\n` +
+    `- Utilise UNIQUEMENT: notes.*, analytics.*, files.read, system.*, telegram.send\n\n`;
+
   if (rotation === 0) {
     // Error cluster analysis
     const errors = getUnresolvedErrorSummary();
@@ -92,7 +97,8 @@ function buildLearnerPrompt(cycle: number): string | null {
 
     return (
       `Cycle ${cycle} — Error Cluster Analysis\n\n` +
-      `Tu es l'agent Learner de Kingston. Ta mission : analyser les erreurs récentes et identifier des patterns.\n\n` +
+      `Tu es l'agent Learner de Kingston. Ta mission : analyser les erreurs récentes et identifier des patterns.\n` +
+      AGENT_RULES +
       `## Stats 24h\n${stats}\n\n` +
       `## Erreurs non résolues\n${errors}\n\n` +
       `## Patterns connus : ${patterns.length} (${graduatedCount} gradués, ${pendingCount} proches de graduation)\n\n` +
@@ -111,6 +117,8 @@ function buildLearnerPrompt(cycle: number): string | null {
     if (effectiveness.length === 0) {
       return (
         `Cycle ${cycle} — Rule Effectiveness Review\n\n` +
+        `Tu es l'agent Learner de Kingston.\n` +
+        AGENT_RULES +
         `Aucune règle graduée à évaluer. Vérifie les patterns proches de graduation.\n\n` +
         `1. Liste les error patterns via system.patterns\n` +
         `2. Si des patterns ont 3-4 occurrences, note les dans notes.add pour suivi\n` +
@@ -135,7 +143,8 @@ function buildLearnerPrompt(cycle: number): string | null {
 
     return (
       `Cycle ${cycle} — Rule Effectiveness Review\n\n` +
-      `Tu es l'agent Learner. Évalue l'efficacité des règles apprises.\n\n` +
+      `Tu es l'agent Learner. Évalue l'efficacité des règles apprises.\n` +
+      AGENT_RULES +
       `## Rapport d'efficacité\n${report}\n\n` +
       (ineffective.length > 0
         ? `⚠️ ${ineffective.length} règle(s) désactivée(s) car inefficaces.\n\n`
@@ -176,7 +185,8 @@ function buildLearnerPrompt(cycle: number): string | null {
 
   return (
     `Cycle ${cycle} — Proactive Fix Proposals\n\n` +
-    `Tu es l'agent Learner. Propose des améliorations préventives.\n\n` +
+    `Tu es l'agent Learner. Propose des améliorations préventives.\n` +
+    AGENT_RULES +
     `## Tendances d'erreurs (48h)\n${trendSummary}\n\n` +
     `## Patterns récurrents non gradués\n${recurringReport}\n\n` +
     `Instructions :\n` +

@@ -134,6 +134,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/experiment.js");
   await import("./builtin/optimize.js");
   await import("./builtin/learn.js");
+  await import("./builtin/learnApi.js");
   await import("./builtin/agents.js");
   await import("./builtin/git.js");
   await import("./builtin/memory-ops.js");

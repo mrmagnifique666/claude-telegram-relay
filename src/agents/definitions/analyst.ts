@@ -32,10 +32,16 @@ function buildAnalystPrompt(cycle: number): string | null {
   const h = getCurrentHour();
   if (h >= 23 || h < 7) return null;
 
+  const AGENT_RULES =
+    `RÈGLES STRICTES:\n` +
+    `- INTERDIT: N'utilise JAMAIS browser.* — ça ouvre Chrome sur l'écran de Nicolas.\n` +
+    `- Utilise UNIQUEMENT: market.*, analytics.*, notes.*, telegram.send\n\n`;
+
   // Cycle 0: Daily Alpha Report (first fire after startup)
   if (cycle === 0) {
     return (
       `Tu es Analyst, agent de reporting de Kingston.\n` +
+      AGENT_RULES +
       `Mission: Rapport marché du jour.\n\n` +
       `1. Utilise market.report pour le rapport marché\n` +
       `2. Si le marché est fermé (weekend), dis-le brièvement\n` +
@@ -47,6 +53,7 @@ function buildAnalystPrompt(cycle: number): string | null {
   if (cycle % 4 === 0 && isSunday()) {
     return (
       `Tu es Analyst, agent de reporting de Kingston.\n` +
+      AGENT_RULES +
       `Mission: Rapport hebdomadaire complet.\n\n` +
       `1. Utilise analytics.report avec timeframe="week" pour les stats\n` +
       `2. Utilise analytics.bottlenecks pour les goulots\n` +
@@ -63,6 +70,7 @@ function buildAnalystPrompt(cycle: number): string | null {
   if (cycle % 4 === 0) {
     return (
       `Tu es Analyst, agent de reporting de Kingston.\n` +
+      AGENT_RULES +
       `Mission: Snapshot de performance quotidien.\n\n` +
       `1. Utilise analytics.report avec timeframe="today"\n` +
       `2. Vérifie les métriques: taux d'erreur, skills populaires\n` +
