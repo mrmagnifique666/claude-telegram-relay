@@ -249,8 +249,12 @@ export async function handleMessageStreaming(
 
   log.info(`[router] ${modelLabel(tier)} Streaming to Claude (admin=${userIsAdmin}): ${userMessage.slice(0, 100)}...`);
 
-  // First pass: try streaming
-  const streamResult = await runClaudeStreamAsync(chatId, userMessage, userIsAdmin, draft, model);
+  // First pass: try streaming (with safety timeout to prevent hanging)
+  const streamPromise = runClaudeStreamAsync(chatId, userMessage, userIsAdmin, draft, model);
+  const safetyTimeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("Stream response safety timeout")), config.cliTimeoutMs + 10000)
+  );
+  const streamResult = await Promise.race([streamPromise, safetyTimeout]);
   log.info(`[router-stream] Stream completed: is_tool_call=${streamResult.is_tool_call}, text=${streamResult.text.length} chars, tool=${streamResult.tool || "none"}`);
 
   // If it's a plain text response, we're done (draft already has the content)

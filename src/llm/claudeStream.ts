@@ -288,6 +288,10 @@ export function runClaudeStream(
         tool: toolCall?.tool,
         args: toolCall?.args,
       });
+    } else {
+      // Stream ended cleanly (code 0) with NO output — must still resolve the promise
+      log.warn(`[stream] CLI exited cleanly but produced no output`);
+      callbacks.onComplete({ text: "", is_tool_call: false });
     }
   });
 

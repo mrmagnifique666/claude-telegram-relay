@@ -313,7 +313,15 @@ export function createBot(): Bot {
       try {
         if (config.streamingEnabled) {
           const draft = createDraftController(bot, chatId);
-          const response = await handleMessageStreaming(chatId, messageWithMeta, userId, draft);
+          let response: string;
+          try {
+            response = await handleMessageStreaming(chatId, messageWithMeta, userId, draft);
+          } catch (streamErr) {
+            // Streaming failed — try non-streaming fallback
+            log.warn(`[telegram] Streaming failed, falling back to batch: ${streamErr}`);
+            await draft.cancel();
+            response = await handleMessage(chatId, messageWithMeta, userId);
+          }
           const draftMsgId = draft.getMessageId();
           log.info(`[telegram] Streaming done: response=${response.length} chars, draftMsgId=${draftMsgId}`);
           // Draft controller already sent/edited the message if streaming worked.
@@ -321,7 +329,7 @@ export function createBot(): Bot {
           if (!draftMsgId) {
             if (!response || response.trim().length === 0) {
               log.warn(`[telegram] Empty response from streaming — sending fallback`);
-              await bot.api.sendMessage(chatId, "Message reçu et traité.");
+              await bot.api.sendMessage(chatId, "Je n'ai pas pu générer de réponse. Réessaie.");
             } else {
               log.info(`[telegram] Sending response via bot.api.sendMessage (${response.length} chars)...`);
               try {
@@ -348,7 +356,9 @@ export function createBot(): Bot {
         log.error("Error handling message:", err);
         logError(err instanceof Error ? err : String(err), "telegram:text_handler");
         await reaction.error();
-        await ctx.reply("Sorry, something went wrong processing your message.");
+        try {
+          await ctx.reply("Désolé, une erreur s'est produite. Réessaie.");
+        } catch { /* if even this fails, we can't do more */ }
       }
     });
   });

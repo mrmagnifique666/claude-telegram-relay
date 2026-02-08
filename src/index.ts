@@ -116,6 +116,13 @@ async function main() {
     releaseLock();
     process.exit(0);
   });
+  // Catch unhandled errors — prevent silent crashes
+  process.on("uncaughtException", (err) => {
+    log.error("[FATAL] Uncaught exception:", err);
+  });
+  process.on("unhandledRejection", (reason) => {
+    log.error("[FATAL] Unhandled promise rejection:", reason);
+  });
 
   // Process any pending code requests from Kingston
   await processCodeRequests();

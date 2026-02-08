@@ -100,7 +100,7 @@ function buildConfig() {
     debounceMs: Number(optional("DEBOUNCE_MS", "1500")),
     streamingEnabled: optional("STREAMING_ENABLED", "true") === "true",
     draftEditIntervalMs: Number(optional("DRAFT_EDIT_INTERVAL_MS", "300")),
-    draftStartThreshold: Number(optional("DRAFT_START_THRESHOLD", "40")),
+    draftStartThreshold: Number(optional("DRAFT_START_THRESHOLD", "10")),
 
     // Agents
     agentScoutEnabled: optional("AGENT_SCOUT_ENABLED", "false") === "true",

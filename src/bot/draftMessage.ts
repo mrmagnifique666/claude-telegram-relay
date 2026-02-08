@@ -114,7 +114,11 @@ export function createDraftController(bot: Bot, chatId: number): DraftController
         pendingUpdate = null;
       }
       if (messageId && currentFullText) {
-        await doEdit(currentFullText, false);
+        try {
+          await doEdit(currentFullText, false);
+        } catch (err) {
+          log.warn(`[draft] finalize edit failed: ${err}`);
+        }
       }
     },
 
