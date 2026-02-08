@@ -136,8 +136,8 @@ export async function handleMessage(
     }
   }
 
-  // Tool chaining loop — use sonnet for follow-ups (better reasoning, $0 on Max plan)
-  const followUpModel = getModelId("sonnet");
+  // Tool chaining loop — use haiku for follow-ups (faster, sufficient for tool routing)
+  const followUpModel = getModelId("haiku");
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
 
@@ -223,6 +223,26 @@ export async function handleMessage(
         return result.text;
       }
       continue;
+    }
+
+    // Type coercion: LLMs often pass numbers as strings ("10" instead of 10)
+    // Coerce args to match the expected schema types before validation
+    for (const [key, val] of Object.entries(safeArgs)) {
+      const prop = skill.argsSchema.properties[key];
+      if (!prop) continue;
+      if (prop.type === "number" && typeof val === "string") {
+        const num = Number(val);
+        if (!isNaN(num)) {
+          safeArgs[key] = num;
+          log.debug(`[router] Coerced "${key}" from string "${val}" to number ${num} for ${tool}`);
+        }
+      } else if (prop.type === "boolean" && typeof val === "string") {
+        safeArgs[key] = val === "true" || val === "1";
+        log.debug(`[router] Coerced "${key}" from string "${val}" to boolean for ${tool}`);
+      } else if (prop.type === "string" && typeof val === "number") {
+        safeArgs[key] = String(val);
+        log.debug(`[router] Coerced "${key}" from number ${val} to string for ${tool}`);
+      }
     }
 
     // Validate args — feed error back to Claude so it can fix & retry
@@ -431,7 +451,7 @@ export async function handleMessageStreaming(
   };
 
   // Tool chaining loop (batch mode, sonnet for better reasoning)
-  const streamFollowUpModel = getModelId("sonnet");
+  const streamFollowUpModel = getModelId("haiku");
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
 
@@ -458,7 +478,7 @@ export async function handleMessageStreaming(
     }
 
     // Agent chatId fix: rewrite fake agent chatIds to real admin chatId for telegram.*
-    if (chatId >= 100 && chatId <= 103 && tool.startsWith("telegram.") && config.adminChatId) {
+    if (chatId >= 100 && chatId <= 103 && tool.startsWith("telegram.") && config.adminChatId > 0) {
       safeArgs.chatId = String(config.adminChatId);
       log.debug(`[router-stream] Agent ${chatId}: rewrote chatId to admin ${config.adminChatId} for ${tool}`);
     }
@@ -497,6 +517,23 @@ export async function handleMessageStreaming(
       }
       result = batchResultToRouterResult(batchResult);
       continue;
+    }
+
+    // Type coercion: LLMs often pass numbers as strings ("10" instead of 10)
+    for (const [key, val] of Object.entries(safeArgs)) {
+      const prop = skill.argsSchema.properties[key];
+      if (!prop) continue;
+      if (prop.type === "number" && typeof val === "string") {
+        const num = Number(val);
+        if (!isNaN(num)) {
+          safeArgs[key] = num;
+          log.debug(`[router-stream] Coerced "${key}" from string "${val}" to number ${num} for ${tool}`);
+        }
+      } else if (prop.type === "boolean" && typeof val === "string") {
+        safeArgs[key] = val === "true" || val === "1";
+      } else if (prop.type === "string" && typeof val === "number") {
+        safeArgs[key] = String(val);
+      }
     }
 
     const validationError = validateArgs(safeArgs, skill.argsSchema);

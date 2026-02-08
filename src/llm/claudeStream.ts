@@ -269,19 +269,22 @@ export function runClaudeStream(
       callbacks.onError(new Error("Claude CLI stream timed out"));
     }, config.cliTimeoutMs);
 
-    // Stall detection: if no output for 90 seconds, kill the stream
+    // Stall detection: if no output for 5 minutes, kill the stream.
+    // Must be generous — CLI with --dangerously-skip-permissions can be silent
+    // for extended periods while executing internal tools (Read/Write/Bash).
+    const STALL_TIMEOUT_MS = 300_000;
     let lastActivity = Date.now();
     const stallInterval = setInterval(() => {
-      if (Date.now() - lastActivity > 90_000) {
+      if (Date.now() - lastActivity > STALL_TIMEOUT_MS) {
         clearInterval(stallInterval);
         if (!killed) {
           killed = true;
-          log.warn(`[stream] No output for 90s — killing stalled stream`);
+          log.warn(`[stream] No output for ${STALL_TIMEOUT_MS / 1000}s — killing stalled stream`);
           proc?.kill("SIGTERM");
-          callbacks.onError(new Error("Claude CLI stream stalled (no output for 90s)"));
+          callbacks.onError(new Error(`Claude CLI stream stalled (no output for ${STALL_TIMEOUT_MS / 1000}s)`));
         }
       }
-    }, 10_000);
+    }, 15_000);
 
     let accumulated = "";
     let lineBuffer = "";

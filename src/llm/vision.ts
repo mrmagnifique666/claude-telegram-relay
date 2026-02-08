@@ -8,11 +8,15 @@ import path from "node:path";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 
-const VISION_MODEL = "gemini-2.0-flash";
+const VISION_MODEL = "gemini-2.5-flash";
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
-const SYSTEM_PROMPT =
-  "Décris précisément ce que tu vois dans cette image. Ne fabrique pas de détails. Si tu n'es pas sûr de quelque chose, dis-le. Réponds en français.";
+const SYSTEM_PROMPT = `Décris précisément ce que tu vois dans cette image. Règles strictes:
+- Distingue clairement: photo réelle, dessin, caricature, illustration, mème, screenshot, document.
+- Si c'est un dessin/caricature d'une personne, dis "caricature/dessin d'une personne" — ne confonds PAS avec un animal.
+- Ne fabrique pas de détails. Si tu n'es pas sûr, dis-le.
+- Identifie: personnes, objets, texte visible, couleurs dominantes, contexte/lieu.
+- Réponds en français, concis (3-5 phrases max).`;
 
 /** Map file extension to MIME media type. */
 function detectMediaType(

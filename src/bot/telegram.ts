@@ -333,23 +333,41 @@ export function createBot(): Bot {
           const draft = createDraftController(bot, chatId);
           let response: string;
 
-          // Long-processing feedback: send typing + notice if response takes > 25s
-          const longProcessTimer = setTimeout(async () => {
+          // Periodic typing indicator + "working on it" message for long responses
+          let timedOut = false;
+          let timeoutMsgId: number | undefined;
+          const interimTimer = setTimeout(async () => {
+            timedOut = true;
+            try {
+              await bot.api.sendChatAction(chatId, "typing");
+              const msg = await bot.api.sendMessage(chatId, "Je travaille sur ta demande, ça prend un peu plus de temps que prévu...");
+              timeoutMsgId = msg.message_id;
+            } catch { /* ignore */ }
+          }, 30_000);
+
+          // Keep sending "typing" every 8s so Telegram shows the indicator
+          const typingInterval = setInterval(async () => {
             try { await bot.api.sendChatAction(chatId, "typing"); } catch { /* ignore */ }
-          }, 25_000);
+          }, 8_000);
 
           try {
             response = await handleMessageStreaming(chatId, messageWithMeta, userId, draft);
           } catch (streamErr) {
-            // Streaming failed — try non-streaming fallback
             log.warn(`[telegram] Streaming failed, falling back to batch: ${streamErr}`);
             await draft.cancel();
             response = await handleMessage(chatId, messageWithMeta, userId);
           } finally {
-            clearTimeout(longProcessTimer);
+            clearTimeout(interimTimer);
+            clearInterval(typingInterval);
           }
+
+          // Clean up the "working on it" message
+          if (timedOut && timeoutMsgId) {
+            try { await bot.api.deleteMessage(chatId, timeoutMsgId); } catch { /* ignore */ }
+          }
+
           const draftMsgId = draft.getMessageId();
-          log.info(`[telegram] Streaming done: response=${response.length} chars, draftMsgId=${draftMsgId}`);
+          log.info(`[telegram] Streaming done: response=${response.length} chars, draftMsgId=${draftMsgId}, timedOut=${timedOut}`);
           // Draft controller already sent/edited the message if streaming worked.
           // If draft has no message (e.g. tool call path), send the response normally.
           if (!draftMsgId) {
@@ -419,12 +437,20 @@ export function createBot(): Bot {
         localPath = await downloadTelegramFile(bot, largest.file_id, filename);
         log.info(`Downloaded photo to ${localPath}`);
 
-        // Use Anthropic Vision API for real image analysis (not base64 text)
+        // Analyze image with Gemini vision
         const { describeImage } = await import("../llm/vision.js");
         const description = await describeImage(localPath, caption || "Que vois-tu dans cette image?");
         log.info(`[telegram] Vision analysis: ${description.slice(0, 100)}...`);
 
-        const message = `[L'utilisateur a envoyé une photo. Voici l'analyse de l'image:]\n${description}${caption ? `\n\n[Légende:] ${caption}` : ""}`;
+        // Keep the image file so Kingston can reference it for image.edit
+        // Include the file path so Kingston can use image.edit if needed
+        const message = [
+          `[L'utilisateur a envoyé une photo.]`,
+          `[Fichier sauvegardé: ${localPath}]`,
+          `[Analyse de l'image:]\n${description}`,
+          caption ? `[Légende:] ${caption}` : "",
+          `[Note: Tu peux utiliser image.edit avec imagePath="${localPath}" pour modifier cette image.]`,
+        ].filter(Boolean).join("\n");
         const response = await handleMessage(chatId, message, userId);
         await sendLong(ctx, response);
         await reaction.done();
@@ -434,9 +460,7 @@ export function createBot(): Bot {
         await reaction.error();
         await ctx.reply("Sorry, something went wrong processing your photo.");
       } finally {
-        if (localPath && fs.existsSync(localPath)) {
-          fs.unlinkSync(localPath);
-        }
+        // Don't delete — keep for image.edit. Files are cleaned up on next upload cycle.
       }
     });
   });

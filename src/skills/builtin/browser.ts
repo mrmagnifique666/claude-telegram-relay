@@ -34,6 +34,12 @@ async function takeAndSendScreenshot(chatId: number, selector?: string): Promise
   const sendPhoto = getBotPhotoFn();
   if (!sendPhoto) return "Error: bot photo API not available.";
 
+  // Validate chatId — must be a positive number (not a fake agent chatId like 100-103)
+  if (!chatId || isNaN(chatId) || chatId <= 0) {
+    log.warn(`[browser] Invalid chatId ${chatId} — skipping screenshot send`);
+    return `Screenshot skipped: invalid chatId (${chatId}). Page: ${page.url()}`;
+  }
+
   let buffer: Buffer;
   if (selector) {
     const el = await page.$(selector);
@@ -44,9 +50,14 @@ async function takeAndSendScreenshot(chatId: number, selector?: string): Promise
   }
 
   const currentUrl = page.url();
-  await sendPhoto(chatId, buffer, `Screenshot: ${currentUrl}`);
-  log.info(`[browser] Screenshot sent to chat ${chatId} (${buffer.length} bytes)`);
-  return `Screenshot sent (${buffer.length} bytes). Current page: ${currentUrl}`;
+  try {
+    await sendPhoto(chatId, buffer, `Screenshot: ${currentUrl}`);
+    log.info(`[browser] Screenshot sent to chat ${chatId} (${buffer.length} bytes)`);
+    return `Screenshot sent (${buffer.length} bytes). Current page: ${currentUrl}`;
+  } catch (err) {
+    log.warn(`[browser] Failed to send screenshot to chat ${chatId}: ${err instanceof Error ? err.message : String(err)}`);
+    return `Screenshot captured (${buffer.length} bytes) but failed to send to chat. Current page: ${currentUrl}`;
+  }
 }
 
 // ── Existing Skills ─────────────────────────────────────────
