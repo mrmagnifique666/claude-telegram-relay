@@ -45,7 +45,7 @@ function buildConfig() {
     maxToolChain: Number(optional("MAX_TOOL_CHAIN", "5")),
     shellTimeout: Number(optional("SHELL_TIMEOUT_MS", "30000")),
     codeTimeout: Number(optional("CODE_TIMEOUT_MS", "30000")),
-    cliTimeoutMs: Number(optional("CLI_TIMEOUT_MS", "180000")),
+    cliTimeoutMs: Number(optional("CLI_TIMEOUT_MS", "300000")),
     claudeModel: optional("CLAUDE_MODEL", "claude-sonnet-4-5-20250929"),
     claudeModelHaiku: optional("CLAUDE_MODEL_HAIKU", "claude-haiku-4-5-20251001"),
     claudeModelSonnet: optional("CLAUDE_MODEL_SONNET", "claude-sonnet-4-5-20250929"),

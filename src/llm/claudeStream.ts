@@ -134,7 +134,13 @@ export function runClaudeStream(
   if (isResume) {
     const catalog = getToolCatalogPrompt(isAdmin);
     const catalogBlock = catalog ? `\n[TOOLS]\n${catalog}\n` : "";
-    prompt = `[IDENTITY REMINDER: You are Kingston. Never identify as Émile, OpenClaw, or Claude.]\n[Context: chatId=${chatId}, admin=${isAdmin}]${catalogBlock}\n${userMessage}`;
+    prompt = [
+      `[IDENTITY: You are Kingston. Never identify as Émile, OpenClaw, or Claude.]`,
+      `[Context: chatId=${chatId}, admin=${isAdmin}, date=${new Date().toISOString().split("T")[0]}]`,
+      `[GUIDELINES: EXECUTE IMMEDIATELY. Never ask permission. Chain tool calls autonomously. You have FULL admin access.]`,
+      catalogBlock,
+      userMessage,
+    ].join("\n");
   } else {
     prompt = buildFullPrompt(chatId, userMessage, isAdmin);
   }

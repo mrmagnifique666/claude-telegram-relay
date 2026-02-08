@@ -24,6 +24,16 @@ export function setProgressCallback(cb: (chatId: number, message: string) => Pro
   progressCallback = cb;
 }
 
+/** Safe progress update — never throws (prevents Telegram API errors from crashing router) */
+async function safeProgress(chatId: number, message: string): Promise<void> {
+  if (!progressCallback || chatId <= 1000) return;
+  try {
+    await progressCallback(chatId, message);
+  } catch (err) {
+    log.warn(`[router] progressCallback failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 /**
  * Handle a user message end-to-end:
  * 1. Send to Claude
@@ -56,8 +66,8 @@ export async function handleMessage(
     return result.text;
   }
 
-  // Tool chaining loop — use haiku for intermediate routing (cheaper)
-  const followUpModel = getModelId("haiku");
+  // Tool chaining loop — use sonnet for follow-ups (better reasoning, $0 on Max plan)
+  const followUpModel = getModelId("sonnet");
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
 
@@ -115,9 +125,7 @@ export async function handleMessage(
       const msg = tool
         ? `Tool "${tool}" is not permitted${getSkill(tool)?.adminOnly ? " (admin only)" : ""}.`
         : "Tool not permitted.";
-      if (progressCallback && chatId > 1000) {
-        await progressCallback(chatId, `❌ ${msg}`);
-      }
+      await safeProgress(chatId, `❌ ${msg}`);
       addTurn(chatId, { role: "assistant", content: msg });
       return msg;
     }
@@ -128,9 +136,7 @@ export async function handleMessage(
       const errorMsg = `Error: Unknown tool "${tool}". Check the tool catalog and try again.`;
       log.warn(`[router] ${errorMsg}`);
       logError(errorMsg, "router:unknown_tool", tool);
-      if (progressCallback && chatId > 1000) {
-        await progressCallback(chatId, `❌ Unknown tool: ${tool}`);
-      }
+      await safeProgress(chatId, `❌ Unknown tool: ${tool}`);
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
@@ -148,9 +154,7 @@ export async function handleMessage(
       const errorMsg = `Tool "${tool}" argument error: ${validationError}. Fix the arguments and try again.`;
       log.warn(`[router] ${errorMsg}`);
       logError(errorMsg, "router:validation", tool);
-      if (progressCallback && chatId > 1000) {
-        await progressCallback(chatId, `❌ Arg error on ${tool}`);
-      }
+      await safeProgress(chatId, `❌ Arg error on ${tool}`);
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
@@ -171,9 +175,7 @@ export async function handleMessage(
       const errorMsg = `Tool "${tool}" execution failed: ${err instanceof Error ? err.message : String(err)}`;
       log.error(errorMsg);
       logError(err instanceof Error ? err : errorMsg, `router:exec:${tool}`, tool);
-      if (progressCallback && chatId > 1000) {
-        await progressCallback(chatId, `❌ ${tool} failed`);
-      }
+      await safeProgress(chatId, `❌ ${tool} failed`);
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
@@ -188,17 +190,15 @@ export async function handleMessage(
     log.debug(`Tool result (${tool}):`, toolResult.slice(0, 200));
 
     // Heartbeat: send intermediate progress to Telegram (skip dashboard/agent chatIds)
-    if (progressCallback && chatId > 1000) {
-      const preview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
-      await progressCallback(chatId, `⚙️ **${tool}**\n\`\`\`\n${preview}\n\`\`\``);
-    }
+    const preview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
+    await safeProgress(chatId, `⚙️ **${tool}**\n\`\`\`\n${preview}\n\`\`\``);
 
     // Feed tool result back to Claude for next step or final answer
     const followUp = `[Tool "${tool}" returned]:\n${toolResult}`;
     addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
     addTurn(chatId, { role: "user", content: followUp });
 
-    log.info(`[router] Feeding tool result back to Claude (step ${step + 1}, ${modelLabel("haiku")})...`);
+    log.info(`[router] Feeding tool result back to Claude (step ${step + 1}, ${modelLabel("sonnet")})...`);
     result = await runClaude(chatId, followUp, userIsAdmin, followUpModel);
     log.info(`[router] Claude follow-up response type: ${result.type}`);
 
@@ -216,9 +216,7 @@ export async function handleMessage(
   if (result.type === "tool_call") {
     const msg = `Reached tool chain limit (${config.maxToolChain} steps). Last pending tool: ${result.tool}.`;
     logError(msg, "router:chain_limit");
-    if (progressCallback && chatId > 1000) {
-      await progressCallback(chatId, `⚠️ Chain limit reached (${config.maxToolChain} steps)`);
-    }
+    await safeProgress(chatId, `⚠️ Chain limit reached (${config.maxToolChain} steps)`);
     addTurn(chatId, { role: "assistant", content: msg });
     return msg;
   }
@@ -275,8 +273,8 @@ export async function handleMessageStreaming(
     session_id: streamResult.session_id,
   };
 
-  // Tool chaining loop (batch mode, haiku for intermediate routing)
-  const streamFollowUpModel = getModelId("haiku");
+  // Tool chaining loop (batch mode, sonnet for better reasoning)
+  const streamFollowUpModel = getModelId("sonnet");
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
 
@@ -370,10 +368,8 @@ export async function handleMessageStreaming(
       continue;
     }
 
-    if (progressCallback && chatId > 1000) {
-      const preview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
-      await progressCallback(chatId, `⚙️ **${tool}**\n\`\`\`\n${preview}\n\`\`\``);
-    }
+    const sPreview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
+    await safeProgress(chatId, `⚙️ **${tool}**\n\`\`\`\n${sPreview}\n\`\`\``);
 
     const followUp = `[Tool "${tool}" returned]:\n${toolResult}`;
     addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });

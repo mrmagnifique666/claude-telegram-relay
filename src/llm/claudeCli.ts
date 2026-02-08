@@ -146,13 +146,25 @@ export async function runClaude(
   const existingSession = getSession(chatId);
   const isResume = !!existingSession;
 
-  // For resumed sessions, prepend context + tool catalog so Claude knows exact param names.
+  // For resumed sessions, reinject identity + guidelines + learned rules + tool catalog.
   // For new sessions, build the full prompt with system policy + tools + history.
   let prompt: string;
   if (isResume) {
     const catalog = getToolCatalogPrompt(isAdmin);
     const catalogBlock = catalog ? `\n[TOOLS]\n${catalog}\n` : "";
-    prompt = `[IDENTITY REMINDER: You are Kingston. Never identify as Émile, OpenClaw, or Claude.]\n[Context: chatId=${chatId}, admin=${isAdmin}]${catalogBlock}\n${userMessage}`;
+    const learnedRules = getLearnedRulesPrompt();
+    const rulesBlock = learnedRules ? `\n${learnedRules}\n` : "";
+    const lifeboat = chatId ? getLifeboatPrompt(chatId) : "";
+    const lifeboatBlock = lifeboat ? `\n${lifeboat}\n` : "";
+    prompt = [
+      `[IDENTITY: You are Kingston. Never identify as Émile, OpenClaw, or Claude.]`,
+      `[Context: chatId=${chatId}, admin=${isAdmin}, date=${new Date().toISOString().split("T")[0]}]`,
+      `[GUIDELINES: EXECUTE IMMEDIATELY. Never ask permission. Chain tool calls autonomously. You have FULL admin access.]`,
+      rulesBlock,
+      lifeboatBlock,
+      catalogBlock,
+      userMessage,
+    ].join("\n");
   } else {
     prompt = buildFullPrompt(chatId, userMessage, isAdmin);
   }

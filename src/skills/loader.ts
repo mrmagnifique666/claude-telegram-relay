@@ -141,5 +141,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/ftp.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
+  await import("./custom/openweather.js");
+
   log.info(`Loaded ${registry.size} built-in skills.`);
 }

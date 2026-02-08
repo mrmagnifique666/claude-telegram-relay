@@ -23,12 +23,16 @@ registerSkill({
   async execute(args): Promise<string> {
     const filePath = safeSandboxPath(args.path as string);
     if (!filePath) return "Error: path is outside the sandbox.";
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    try {
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(filePath, args.content as string, "utf-8");
+      return `Written ${(args.content as string).length} bytes to ${args.path}.`;
+    } catch (err) {
+      return `Error writing file: ${err instanceof Error ? err.message : String(err)}`;
     }
-    fs.writeFileSync(filePath, args.content as string, "utf-8");
-    return `Written ${(args.content as string).length} bytes to ${args.path}.`;
   },
 });
 
@@ -46,12 +50,16 @@ registerSkill({
   },
   async execute(args): Promise<string> {
     const filePath = path.resolve(args.path as string);
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    try {
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(filePath, args.content as string, "utf-8");
+      return `Written ${(args.content as string).length} bytes to ${filePath}.`;
+    } catch (err) {
+      return `Error writing file: ${err instanceof Error ? err.message : String(err)}`;
     }
-    fs.writeFileSync(filePath, args.content as string, "utf-8");
-    return `Written ${(args.content as string).length} bytes to ${filePath}.`;
   },
 });
 
@@ -68,10 +76,14 @@ registerSkill({
   },
   async execute(args): Promise<string> {
     const filePath = path.resolve(args.path as string);
-    if (!fs.existsSync(filePath)) return "File not found.";
-    const stat = fs.statSync(filePath);
-    if (stat.isDirectory()) return "Error: path is a directory, not a file.";
-    if (stat.size > 50 * 1024) return "Error: file exceeds 50 KB limit.";
-    return fs.readFileSync(filePath, "utf-8");
+    try {
+      if (!fs.existsSync(filePath)) return "File not found.";
+      const stat = fs.statSync(filePath);
+      if (stat.isDirectory()) return "Error: path is a directory, not a file.";
+      if (stat.size > 50 * 1024) return "Error: file exceeds 50 KB limit.";
+      return fs.readFileSync(filePath, "utf-8");
+    } catch (err) {
+      return `Error reading file: ${err instanceof Error ? err.message : String(err)}`;
+    }
   },
 });

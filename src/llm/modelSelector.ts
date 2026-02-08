@@ -34,9 +34,9 @@ export function selectModel(
     return tier;
   }
 
-  // Tool chain follow-ups — haiku is enough for routing tool results
+  // Tool chain follow-ups — use sonnet for better reasoning ($0 on Max plan)
   if (context === "tool_followup") {
-    return "haiku";
+    return "sonnet";
   }
 
   // Agent tasks — default haiku, sonnet for synthesis/deep analysis
