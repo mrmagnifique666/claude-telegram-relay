@@ -47,13 +47,28 @@ const MIME: Record<string, string> = {
   ".ico": "image/x-icon",
 };
 
-// ── Helpers ─────────────────────────────────────────────────
-function json(res: http.ServerResponse, data: unknown, status = 200) {
+// ── Auth ────────────────────────────────────────────────────
+/** Check DASHBOARD_TOKEN on mutating API endpoints. Returns true if OK. */
+function checkAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+  const token = config.dashboardToken;
+  if (!token) return true; // no token configured = open (localhost-only anyway)
+  const provided = req.headers["x-auth-token"] as string | undefined;
+  if (provided === token) return true;
+  sendJson(res, 401, { ok: false, error: "Unauthorized - missing or invalid X-Auth-Token" });
+  return false;
+}
+
+// Helpers
+function sendJson(res: http.ServerResponse, status: number, data: unknown) {
   res.writeHead(status, {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": `http://localhost:${PORT}`,
   });
   res.end(JSON.stringify(data));
+}
+
+function json(res: http.ServerResponse, data: unknown, status = 200) {
+  sendJson(res, status, data);
 }
 
 function serveFile(res: http.ServerResponse, filePath: string) {
@@ -215,9 +230,14 @@ function apiLearningInsights(): unknown {
 // Dashboard has its own chatIds — separate from Telegram sessions
 const KINGSTON_DASHBOARD_ID = 2;
 const EMILE_DASHBOARD_ID = 3;
+type DashboardAgent = "kingston" | "emile";
+
+function getDashboardUserId(): number {
+  return Number(config.allowedUsers[0]) || 8189338836;
+}
 
 async function apiChatKingston(message: string): Promise<string> {
-  const userId = Number(config.allowedUsers[0]) || 8189338836;
+  const userId = getDashboardUserId();
   const prefix =
     `[DASHBOARD MODE — KINGSTON]\n` +
     `Tu es Kingston dans le Dashboard web local. Nicolas voit ta réponse ici — PAS telegram.send.\n` +
@@ -244,31 +264,64 @@ async function apiChatKingston(message: string): Promise<string> {
 }
 
 async function apiChatEmile(message: string): Promise<string> {
-  const userId = Number(config.allowedUsers[0]) || 8189338836;
+  const userId = getDashboardUserId();
   const prefix =
-    `[DASHBOARD MODE — ÉMILE]\n` +
-    `Tu es Émile, architecte logiciel et stratège. Dashboard web local. PAS telegram.send.\n` +
-    `Tu travailles SUR le code de Kingston — un système multi-agents (Telegram bot + Scout/Analyst/Learner/Executor).\n` +
-    `Tu as l'AUTONOMIE COMPLÈTE et l'approbation de Nicolas pour modifier le code.\n\n` +
-    `## RÈGLE #1 : CODE D'ABORD, DISCUSSION ENSUITE\n` +
-    `- Quand on te demande d'améliorer → lis le code source, identifie le problème, écris la solution\n` +
-    `- Quand Kingston propose une idée → évalue-la en lisant le code, puis implémente si c'est bon\n` +
-    `- Ne JAMAIS proposer sans implémenter. Pas de "on pourrait", pas de "il faudrait"\n` +
-    `- Chaque réponse doit contenir AU MOINS une action concrète (lecture ou écriture de fichier)\n\n` +
-    `## OUTILS DISPONIBLES\n` +
-    `- files.read_anywhere: lire n'importe quel fichier du projet\n` +
-    `- files.write_anywhere: modifier n'importe quel fichier du projet\n` +
-    `- shell.exec: exécuter des commandes shell\n` +
-    `- code.run: exécuter du code TypeScript/JavaScript\n` +
-    `- notes.add: persister des décisions architecturales\n` +
-    `- analytics.log: logger une action\n\n` +
-    `## FORMAT DE RÉPONSE\n` +
-    `**DIAGNOSTIC** : ce que tu as lu et analysé\n` +
-    `**IMPLÉMENTATION** : ce que tu as modifié (fichier:lignes)\n` +
-    `**VALIDATION** : comment vérifier que ça marche\n` +
-    `**ARCHITECTURE** : impact sur le système global\n\n` +
+    `[DASHBOARD MODE - EMILE]\n` +
+    `Tu es Emile, architecte logiciel. Dashboard web local. PAS telegram.send.\n` +
+    `Mode par defaut: conversation directe concise et utile.\n` +
+    `Si Nicolas demande explicitement de coder/modifier, alors execute les actions sur le repo.\n` +
+    `Sinon, reponds clairement sans lancer de workflow long.\n\n` +
     `Source du projet : ${process.cwd()}\n\n`;
   return handleMessage(EMILE_DASHBOARD_ID, prefix + message, userId, "user");
+}
+async function apiChat(agent: DashboardAgent, message: string): Promise<string> {
+  return agent === "emile" ? apiChatEmile(message) : apiChatKingston(message);
+}
+
+function buildUltimatePrompt(payload: {
+  goal: string;
+  constraints?: string;
+  context?: string;
+  target?: DashboardAgent | "both";
+}): string {
+  const goal = (payload.goal || "").trim() || "Ameliorer le dashboard et livrer une implementation testable.";
+  const constraints = (payload.constraints || "").trim() || "Conserver le style actuel, securiser les endpoints, et garder une UX simple.";
+  const target = payload.target || "both";
+  const context = (payload.context || "").trim();
+  const contextBlock = context ? `\n## CONTEXTE RECENT\n${context}\n` : "";
+
+  return [
+    "[PROMPT ULTIME - DASHBOARD EXECUTION]",
+    `CIBLE: ${target}`,
+    "",
+    "Tu agis comme lead engineer sur ce repo local.",
+    "Objectif: implementer maintenant, avec modifications de fichiers concretes.",
+    "",
+    "## OBJECTIF",
+    goal,
+    "",
+    "## CONTRAINTES",
+    constraints,
+    contextBlock.trimEnd(),
+    "",
+    "## EXIGENCES D'EXECUTION",
+    "- Lire les fichiers pertinents avant toute proposition.",
+    "- Modifier le code directement (pas de plan theorique sans action).",
+    "- Valider avec au moins une commande de verification (build/test/lint).",
+    "- Si bloque: expliquer precisement le blocage et proposer la correction immediate.",
+    "",
+    "## LIVRABLES ATTENDUS",
+    "1. Liste des fichiers modifies.",
+    "2. Resume exact des changements.",
+    "3. Resultat des verifications executees.",
+    "4. Prochaine etape concrete.",
+    "",
+    "## FORMAT DE REPONSE",
+    "ANALYSE:",
+    "ACTIONS:",
+    "VALIDATION:",
+    "SUITE:",
+  ].filter(Boolean).join("\n");
 }
 
 // ── Request handler ─────────────────────────────────────────
@@ -277,12 +330,12 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   const pathname = url.pathname;
   const method = req.method || "GET";
 
-  // CORS preflight
+  // CORS preflight — restrict to localhost only
   if (method === "OPTIONS") {
     res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": `http://localhost:${PORT}`,
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Headers": "Content-Type, X-Auth-Token",
     });
     res.end();
     return;
@@ -316,6 +369,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       return json(res, apiLearningInsights());
     }
     if (pathname === "/api/chat/reset" && method === "POST") {
+      if (!checkAuth(req, res)) return;
       // Reset dashboard sessions for fresh starts
       clearSession(KINGSTON_DASHBOARD_ID);
       clearSession(EMILE_DASHBOARD_ID);
@@ -325,28 +379,56 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       return json(res, { ok: true, message: "Sessions reset" });
     }
     if (pathname === "/api/chat/kingston" && method === "POST") {
+      if (!checkAuth(req, res)) return;
       const body = await parseBody(req);
       const response = await apiChatKingston(body.message as string);
-      return json(res, { response });
+      return json(res, { ok: true, response });
     }
     if (pathname === "/api/chat/emile" && method === "POST") {
+      if (!checkAuth(req, res)) return;
       const body = await parseBody(req);
       const response = await apiChatEmile(body.message as string);
-      return json(res, { response });
+      return json(res, { ok: true, response });
+    }
+    if (pathname === "/api/chat" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      const message = String(body.message || "").trim();
+      const rawAgent = String(body.agent || "kingston").toLowerCase();
+      const agent: DashboardAgent = rawAgent === "emile" ? "emile" : "kingston";
+      if (!message) return sendJson(res, 400, { ok: false, error: "message is required" });
+      const response = await apiChat(agent, message);
+      return json(res, { ok: true, response, agent });
+    }
+    if (pathname === "/api/chat/ultimate-prompt" && method === "POST") {
+      if (!checkAuth(req, res)) return;
+      const body = await parseBody(req);
+      const prompt = buildUltimatePrompt({
+        goal: String(body.goal || ""),
+        constraints: body.constraints ? String(body.constraints) : undefined,
+        context: body.context ? String(body.context) : undefined,
+        target: body.target === "emile" || body.target === "kingston" || body.target === "both"
+          ? body.target
+          : "both",
+      });
+      return json(res, { ok: true, prompt });
+    }
+    if (pathname.startsWith("/api/")) {
+      return sendJson(res, 404, { ok: false, error: "Not found" });
     }
 
     // ── Static files ──
-    let filePath = path.join(STATIC_DIR, pathname === "/" ? "index.html" : pathname);
-    // Prevent path traversal
-    if (!filePath.startsWith(STATIC_DIR)) {
+    const resolved = path.resolve(STATIC_DIR, (pathname === "/" ? "index.html" : pathname).replace(/^\//, ""));
+    // Prevent path traversal (resolve normalizes ../ sequences)
+    if (!resolved.startsWith(STATIC_DIR)) {
       res.writeHead(403);
       res.end("Forbidden");
       return;
     }
-    serveFile(res, filePath);
+    serveFile(res, resolved);
   } catch (err) {
     log.error("[dashboard] Request error:", err);
-    json(res, { error: (err as Error).message }, 500);
+    sendJson(res, 500, { ok: false, error: (err as Error).message });
   }
 }
 
@@ -381,10 +463,14 @@ export function startDashboard(): void {
     }
   });
 
-  server.listen(PORT, () => {
-    log.info(`[dashboard] UI available at http://localhost:${PORT}`);
+  server.listen(PORT, "127.0.0.1", () => {
+    log.info(`[dashboard] UI available at http://localhost:${PORT} (localhost only)`);
   });
 }
 
 // Re-export broadcast for use by other modules
 export { broadcast } from "./broadcast.js";
+
+
+
+

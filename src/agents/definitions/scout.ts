@@ -101,7 +101,7 @@ export function createScoutConfig(): AgentConfig {
     role: "Prospecting & market intelligence agent",
     heartbeatMs: config.agentScoutHeartbeatMs,
     enabled: config.agentScoutEnabled,
-    chatId: 100, // Dedicated chatId — agents must NOT share Nicolas's Telegram chatId
+    chatId: 100, // Session isolation ID — router rewrites to adminChatId for telegram.send
     userId: config.voiceUserId,
     buildPrompt: buildScoutPrompt,
     cycleCount: 6,

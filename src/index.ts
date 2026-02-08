@@ -9,6 +9,7 @@
 import { config, watchEnv } from "./config/env.js";
 import { setLogLevel, addRedactPattern, log } from "./utils/log.js";
 import { loadBuiltinSkills } from "./skills/loader.js";
+import { migrateNotesToMemories } from "./memory/semantic.js";
 import { processCodeRequests } from "./processors/codequeue.js";
 import { createBot } from "./bot/telegram.js";
 import { startVoiceServer } from "./voice/server.js";
@@ -79,12 +80,24 @@ async function main() {
   // Configure logging
   setLogLevel(config.logLevel);
 
-  // Redact the bot token from logs
-  if (config.telegramToken) {
-    addRedactPattern(new RegExp(config.telegramToken.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"));
+  // Redact secrets from logs
+  const secretsToRedact = [
+    config.telegramToken,
+    config.geminiApiKey,
+    config.anthropicApiKey,
+    config.twilioAuthToken,
+    config.deepgramApiKey,
+    config.elevenlabsApiKey,
+    config.adminPassphrase,
+    config.braveSearchApiKey,
+  ];
+  for (const secret of secretsToRedact) {
+    if (secret && secret.length > 4) {
+      addRedactPattern(new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"));
+    }
   }
 
-  log.info("Starting claude-telegram-relay...");
+  log.info("Starting Bastion OS — Kingston online...");
   log.info(`Allowed users: ${config.allowedUsers.length > 0 ? config.allowedUsers.join(", ") : "(none — all blocked!)"}`);
   log.info(`Allowed tools: ${config.allowedTools.join(", ")}`);
   log.info(`Memory turns: ${config.memoryTurns}`);
@@ -102,20 +115,26 @@ async function main() {
   // Acquire lock file (exits if another instance is running)
   acquireLock();
 
-  // Register cleanup handlers
+  // Register cleanup handlers with graceful shutdown
   process.on("exit", releaseLock);
-  process.on("SIGINT", () => {
+
+  let shuttingDown = false;
+  function gracefulShutdown(signal: string) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info(`[bastion] ${signal} received — shutting down gracefully...`);
     shutdownAgents();
     stopScheduler();
-    releaseLock();
-    process.exit(0);
-  });
-  process.on("SIGTERM", () => {
-    shutdownAgents();
-    stopScheduler();
-    releaseLock();
-    process.exit(0);
-  });
+    // Give in-flight requests up to 5 seconds to complete
+    setTimeout(() => {
+      log.info("[bastion] Grace period ended — exiting.");
+      releaseLock();
+      process.exit(0);
+    }, 5000);
+  }
+
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
   // Catch unhandled errors — prevent silent crashes
   process.on("uncaughtException", (err) => {
     log.error("[FATAL] Uncaught exception:", err);
@@ -130,6 +149,11 @@ async function main() {
   // Load skills
   await loadBuiltinSkills();
 
+  // Migrate notes to semantic memory (one-time, non-blocking)
+  migrateNotesToMemories().catch(err =>
+    log.warn(`[semantic] Migration failed: ${err instanceof Error ? err.message : String(err)}`)
+  );
+
   // Watch .env for hot-reload
   watchEnv();
 
@@ -139,8 +163,9 @@ async function main() {
   // Start voice server (before bot.start() which blocks)
   startVoiceServer();
 
-  // Start scheduler (before bot.start() which blocks)
-  startScheduler(config.voiceChatId, config.voiceUserId);
+  // Start scheduler with its own chatId (1) to avoid polluting Nicolas's CLI session
+  // userId stays as Nicolas's so telegram.send reaches him
+  startScheduler(1, config.voiceUserId);
 
   // Start autonomous agents
   startAgents();

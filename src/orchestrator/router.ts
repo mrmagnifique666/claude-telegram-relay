@@ -9,7 +9,7 @@ import { getSkill, validateArgs } from "../skills/loader.js";
 import { runClaude } from "../llm/claudeCli.js";
 import { runClaudeStream, type StreamResult } from "../llm/claudeStream.js";
 import { runGemini, GeminiRateLimitError, GeminiSafetyError } from "../llm/gemini.js";
-import { addTurn, logError } from "../storage/store.js";
+import { addTurn, logError, getTurns, clearSession } from "../storage/store.js";
 import { autoCompact } from "./compaction.js";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
@@ -68,6 +68,15 @@ export async function handleMessage(
 ): Promise<string> {
   const userIsAdmin = isAdmin(userId);
 
+  // Auto-compact if context is bloated (prevents session timeouts)
+  const currentTurns = getTurns(chatId);
+  if (currentTurns.length > 20) {
+    log.info(`[router] Auto-compacting: ${currentTurns.length} turns exceed threshold (20)`);
+    await autoCompact(chatId, userId).catch(err =>
+      log.warn(`[router] Auto-compact failed: ${err instanceof Error ? err.message : String(err)}`)
+    );
+  }
+
   // Store user turn
   addTurn(chatId, { role: "user", content: userMessage });
 
@@ -104,13 +113,27 @@ export async function handleMessage(
   log.info(`[router] Claude responded with type: ${result.type}`);
 
   if (result.type === "message") {
-    // Guard against empty or error-literal responses
-    const text = result.text && result.text.trim() && !result.text.includes("(Claude returned an empty response)")
-      ? result.text
-      : "Désolé, je n'ai pas pu générer de réponse. Réessaie.";
-    addTurn(chatId, { role: "assistant", content: text });
-    backgroundExtract(chatId, userMessage, text);
-    return text;
+    const isEmpty = !result.text || !result.text.trim() || result.text.includes("(Claude returned an empty response)");
+    if (isEmpty) {
+      // Auto-recovery: clear corrupt session and retry with fresh context
+      log.warn(`[router] Empty CLI response — clearing session ${chatId} and retrying`);
+      clearSession(chatId);
+      result = await runClaude(chatId, userMessage, userIsAdmin, model);
+      log.info(`[router] Retry responded with type: ${result.type}`);
+      if (result.type === "message") {
+        const text = result.text && result.text.trim()
+          ? result.text
+          : "Désolé, je n'ai pas pu générer de réponse. Réessaie.";
+        addTurn(chatId, { role: "assistant", content: text });
+        backgroundExtract(chatId, userMessage, text);
+        return text;
+      }
+      // Retry returned a tool_call — continue to tool chain below
+    } else {
+      addTurn(chatId, { role: "assistant", content: result.text });
+      backgroundExtract(chatId, userMessage, result.text);
+      return result.text;
+    }
   }
 
   // Tool chaining loop — use sonnet for follow-ups (better reasoning, $0 on Max plan)
@@ -295,6 +318,15 @@ export async function handleMessageStreaming(
 ): Promise<string> {
   const userIsAdmin = isAdmin(userId);
 
+  // Auto-compact if context is bloated
+  const streamTurns = getTurns(chatId);
+  if (streamTurns.length > 20) {
+    log.info(`[router-stream] Auto-compacting: ${streamTurns.length} turns exceed threshold (20)`);
+    await autoCompact(chatId, userId).catch(err =>
+      log.warn(`[router-stream] Auto-compact failed: ${err instanceof Error ? err.message : String(err)}`)
+    );
+  }
+
   addTurn(chatId, { role: "user", content: userMessage });
 
   // --- Gemini path (batch mode — Gemini doesn't support streaming + function calling) ---
@@ -341,8 +373,10 @@ export async function handleMessageStreaming(
     streamResult = await Promise.race([streamPromise, safetyTimeout]);
   } catch (streamErr) {
     // Streaming failed (empty response, timeout, process crash) — fall back to batch mode
-    log.warn(`[router-stream] Stream failed: ${streamErr instanceof Error ? streamErr.message : String(streamErr)} — falling back to batch`);
+    log.warn(`[router-stream] Stream failed: ${streamErr instanceof Error ? streamErr.message : String(streamErr)} — clearing session and falling back to batch`);
     await draft.cancel();
+    // Clear potentially corrupt session before retry
+    clearSession(chatId);
     const batchResponse = await runClaude(chatId, userMessage, userIsAdmin, model);
     if (batchResponse.type === "message") {
       const text = batchResponse.text && batchResponse.text.trim() ? batchResponse.text : "Désolé, je n'ai pas pu générer de réponse. Réessaie.";
@@ -364,14 +398,24 @@ export async function handleMessageStreaming(
   // If it's a plain text response, we're done (draft already has the content)
   if (!streamResult.is_tool_call) {
     // Guard against empty responses sneaking through
-    const responseText = streamResult.text && streamResult.text.trim()
-      ? streamResult.text
-      : "Désolé, je n'ai pas pu générer de réponse. Réessaie.";
-    addTurn(chatId, { role: "assistant", content: responseText });
+    if (!streamResult.text || !streamResult.text.trim()) {
+      // Auto-recovery: clear session and retry once
+      log.warn(`[router-stream] Empty stream response — clearing session and retrying`);
+      await draft.cancel();
+      clearSession(chatId);
+      const retryResult = await runClaude(chatId, userMessage, userIsAdmin, model);
+      const retryText = retryResult.type === "message" && retryResult.text?.trim()
+        ? retryResult.text
+        : "Désolé, je n'ai pas pu générer de réponse. Réessaie.";
+      addTurn(chatId, { role: "assistant", content: retryText });
+      backgroundExtract(chatId, userMessage, retryText);
+      return retryText;
+    }
+    addTurn(chatId, { role: "assistant", content: streamResult.text });
     await draft.finalize();
-    backgroundExtract(chatId, userMessage, responseText);
-    log.info(`[router-stream] Returning plain text (${responseText.length} chars)`);
-    return responseText;
+    backgroundExtract(chatId, userMessage, streamResult.text);
+    log.info(`[router-stream] Returning plain text (${streamResult.text.length} chars)`);
+    return streamResult.text;
   }
 
   // It's a tool call — cancel the draft and process the tool chain in batch mode

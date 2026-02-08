@@ -90,7 +90,7 @@ export function createAnalystConfig(): AgentConfig {
     role: "Performance analysis & reporting agent",
     heartbeatMs: config.agentAnalystHeartbeatMs,
     enabled: config.agentAnalystEnabled,
-    chatId: 101, // Dedicated chatId — agents must NOT share Nicolas's Telegram chatId
+    chatId: 101, // Session isolation ID — router rewrites to adminChatId for telegram.send
     userId: config.voiceUserId,
     buildPrompt: buildAnalystPrompt,
   };

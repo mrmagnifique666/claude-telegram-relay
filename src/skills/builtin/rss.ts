@@ -4,6 +4,7 @@
  * Useful for news monitoring and morning briefings.
  */
 import { registerSkill } from "../loader.js";
+import { checkSSRF } from "../../security/ssrf.js";
 
 interface FeedItem {
   title: string;
@@ -75,8 +76,12 @@ registerSkill({
     const url = args.url as string;
     const limit = Math.min(Number(args.limit) || 10, 30);
 
+    // SSRF protection
+    const ssrfError = await checkSSRF(url);
+    if (ssrfError) return ssrfError;
+
     const resp = await fetch(url, {
-      headers: { "User-Agent": "KingstonBot/1.0", Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml" },
+      headers: { "User-Agent": "Bastion/2.0 (Kingston)", Accept: "application/rss+xml, application/atom+xml, application/xml, text/xml" },
     });
     if (!resp.ok) return `Error fetching feed: HTTP ${resp.status}`;
 

@@ -89,7 +89,7 @@ export function createExecutorConfig(): AgentConfig {
     role: "Code request processor — Kingston↔Émile bridge",
     heartbeatMs: config.agentExecutorHeartbeatMs,
     enabled: config.agentExecutorEnabled,
-    chatId: 103, // Dedicated chatId — agents must NOT share Nicolas's Telegram chatId
+    chatId: 103, // Session isolation ID — router rewrites to adminChatId for telegram.send
     userId: config.voiceUserId,
     buildPrompt: buildExecutorPrompt,
     cycleCount: 1, // Every heartbeat checks the queue

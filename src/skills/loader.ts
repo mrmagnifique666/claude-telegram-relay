@@ -81,6 +81,141 @@ export function getToolCatalogPrompt(isAdmin: boolean = false): string {
   return lines.join("\n");
 }
 
+// --- Gemini function declarations ---
+
+/** Gemini type mapping: Kingston "string" → Gemini "STRING" */
+function toGeminiType(t: string): string {
+  const map: Record<string, string> = {
+    string: "STRING",
+    number: "NUMBER",
+    boolean: "BOOLEAN",
+    integer: "INTEGER",
+    array: "ARRAY",
+    object: "OBJECT",
+  };
+  return map[t] || "STRING";
+}
+
+interface GeminiFunctionDeclaration {
+  name: string;
+  description: string;
+  parameters: {
+    type: string;
+    properties: Record<string, { type: string; description?: string }>;
+    required?: string[];
+  };
+}
+
+/** Tier 1 namespaces: always included for admin users */
+const TIER1_PREFIXES = [
+  "help", "notes.", "files.", "shell.", "web.", "telegram.", "system.", "code.",
+  "scheduler.", "errors.", "image.", "time.", "translate.", "git.", "memory.",
+  "skills.", "ftp.", "contacts.", "gmail.", "calendar.", "phone.", "agents.",
+  "config.", "weather.", "network.", "rss.", "math.", "hash.", "convert.",
+];
+
+/** Tier 2 keywords: map keyword patterns to skill prefixes */
+const TIER2_KEYWORDS: Array<{ keywords: string[]; prefix: string }> = [
+  { keywords: ["twitter", "tweet", "x.com"], prefix: "twitter." },
+  { keywords: ["linkedin", "professionnel"], prefix: "linkedin." },
+  { keywords: ["reddit", "subreddit"], prefix: "reddit." },
+  { keywords: ["discord", "serveur"], prefix: "discord." },
+  { keywords: ["moltbook", "agent social"], prefix: "moltbook." },
+  { keywords: ["stripe", "paiement", "payment", "facture"], prefix: "stripe." },
+  { keywords: ["hubspot", "crm", "client"], prefix: "hubspot." },
+  { keywords: ["browser", "navigateur", "page web", "screenshot", "puppeteer"], prefix: "browser." },
+  { keywords: ["analytics", "analyse", "statistique"], prefix: "analytics." },
+  { keywords: ["optimize", "optimis", "a/b test"], prefix: "optimize." },
+  { keywords: ["learn", "apprendre", "api", "documentation"], prefix: "learn." },
+  { keywords: ["market", "marché", "concurren"], prefix: "market." },
+  { keywords: ["facebook", "meta", "fb"], prefix: "facebook." },
+  { keywords: ["instagram", "insta", "ig"], prefix: "instagram." },
+  { keywords: ["sms", "texto"], prefix: "sms." },
+  { keywords: ["booking", "réservation", "rendez-vous"], prefix: "booking." },
+  { keywords: ["whatsapp"], prefix: "whatsapp." },
+  { keywords: ["experiment", "expérien"], prefix: "experiment." },
+  { keywords: ["crypto", "bitcoin", "ethereum"], prefix: "crypto." },
+  { keywords: ["stocks", "bourse", "action"], prefix: "stocks." },
+  { keywords: ["security", "sécurité", "scan"], prefix: "security." },
+  { keywords: ["audit"], prefix: "audit." },
+  { keywords: ["health", "santé"], prefix: "health." },
+  { keywords: ["db", "database", "sqlite"], prefix: "db." },
+  { keywords: ["api."], prefix: "api." },
+];
+
+/**
+ * Convert skills to Gemini function declarations.
+ * Respects the 128-tool Gemini limit using Tier 1 (always) + Tier 2 (keyword match).
+ * Non-admin users have fewer skills and are always under 128.
+ */
+export function getSkillsForGemini(
+  isAdmin: boolean,
+  userMessage?: string,
+): GeminiFunctionDeclaration[] {
+  const skills = getAllSkills().filter((s) => !s.adminOnly || isAdmin);
+
+  // Non-admin: all skills fit under 128
+  if (!isAdmin) {
+    return skills.map(skillToGeminiDecl);
+  }
+
+  // Admin: Tier 1 always included
+  const tier1: Skill[] = [];
+  const tier2Pool: Skill[] = [];
+
+  for (const s of skills) {
+    const isTier1 = s.name === "help" || TIER1_PREFIXES.some((p) => s.name.startsWith(p));
+    if (isTier1) {
+      tier1.push(s);
+    } else {
+      tier2Pool.push(s);
+    }
+  }
+
+  // Tier 2: match by keywords in user message
+  const lowerMessage = (userMessage || "").toLowerCase();
+  const matchedPrefixes = new Set<string>();
+
+  for (const { keywords, prefix } of TIER2_KEYWORDS) {
+    if (keywords.some((kw) => lowerMessage.includes(kw))) {
+      matchedPrefixes.add(prefix);
+    }
+  }
+
+  const tier2Matched = tier2Pool.filter((s) =>
+    Array.from(matchedPrefixes).some((p) => s.name.startsWith(p))
+  );
+
+  const selected = [...tier1, ...tier2Matched];
+
+  // Safety: cap at 128
+  const capped = selected.slice(0, 128);
+  log.debug(`[loader] Gemini tools: ${capped.length} (tier1=${tier1.length}, tier2=${tier2Matched.length}, cap=128)`);
+
+  return capped.map(skillToGeminiDecl);
+}
+
+/** Convert a single Kingston skill to a Gemini function declaration */
+function skillToGeminiDecl(skill: Skill): GeminiFunctionDeclaration {
+  const properties: Record<string, { type: string; description?: string }> = {};
+  for (const [key, prop] of Object.entries(skill.argsSchema.properties)) {
+    properties[key] = {
+      type: toGeminiType(prop.type),
+      ...(prop.description ? { description: prop.description } : {}),
+    };
+  }
+
+  return {
+    name: skill.name,
+    description: skill.description,
+    parameters: {
+      type: "OBJECT",
+      properties,
+      ...(skill.argsSchema.required?.length ? { required: skill.argsSchema.required } : {}),
+    },
+  };
+}
+
 /**
  * Load all built-in skills.
  */
@@ -138,7 +273,10 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/agents.js");
   await import("./builtin/git.js");
   await import("./builtin/memory-ops.js");
+  await import("./builtin/semantic-memory.js");
   await import("./builtin/ftp.js");
+  await import("./builtin/office.js");
+  await import("./builtin/desktop.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
   await import("./custom/openweather.js");

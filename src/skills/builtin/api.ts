@@ -3,6 +3,7 @@
  * Full HTTP client — supports GET/POST/PUT/PATCH/DELETE with headers and body.
  */
 import { registerSkill } from "../loader.js";
+import { checkSSRF } from "../../security/ssrf.js";
 
 const ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 const MAX_RESPONSE = 20000;
@@ -55,7 +56,7 @@ registerSkill({
 
     // Parse headers
     let headers: Record<string, string> = {
-      "User-Agent": "ClaudeRelay/1.0",
+      "User-Agent": "Bastion/2.0 (Kingston)",
     };
     if (headersRaw) {
       try {
@@ -68,6 +69,10 @@ registerSkill({
         return "Error: failed to parse headers JSON.";
       }
     }
+
+    // SSRF protection
+    const ssrfError = await checkSSRF(url);
+    if (ssrfError) return ssrfError;
 
     try {
       const controller = new AbortController();

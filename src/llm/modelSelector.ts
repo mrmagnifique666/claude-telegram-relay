@@ -53,29 +53,23 @@ export function selectModel(
     return "sonnet";
   }
 
-  // User messages — content creation → opus
-  const contentKeywords = /\b(rédige|écris|compose|draft|poste|publie|article|post|tweet|linkedin.*post|moltbook.*post|email.*important|lettre|pitch|présentation|stratégi|analyse.*(approfondi|détaillé|complèt))\b/i;
-  if (contentKeywords.test(message)) {
-    log.debug(`[model] Content creation detected → opus`);
-    return "opus";
-  }
-
-  // Simple/short messages → haiku
+  // Simple/short messages → sonnet (still capable but faster than opus)
   const simplePatterns = /^(bonjour|salut|hey|hi|ok|oui|non|merci|thanks|ça va|parfait|super|cool|bye|bonne nuit|good)\b/i;
   if (simplePatterns.test(message.trim()) && message.length < 80) {
-    log.debug(`[model] Simple message detected → haiku`);
-    return "haiku";
+    log.debug(`[model] Simple message detected → sonnet`);
+    return "sonnet";
   }
 
-  // Questions about status, time, weather, simple facts → haiku
+  // Questions about status, time, weather, simple facts → sonnet
   const factualPatterns = /\b(quelle heure|what time|météo|weather|ping|status|combien|how many|quel jour|what day)\b/i;
   if (factualPatterns.test(message) && message.length < 150) {
-    log.debug(`[model] Factual query detected → haiku`);
-    return "haiku";
+    log.debug(`[model] Factual query detected → sonnet`);
+    return "sonnet";
   }
 
-  // Default: sonnet (balanced)
-  return "sonnet";
+  // Default: opus (best reasoning for production user interactions)
+  log.debug(`[model] User message → opus`);
+  return "opus";
 }
 
 /**

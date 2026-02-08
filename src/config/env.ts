@@ -34,6 +34,7 @@ function buildConfig() {
   return {
     telegramToken: required("TELEGRAM_BOT_TOKEN"),
     allowedUsers: csvList("TELEGRAM_ALLOWED_USERS").map(Number),
+    adminChatId: Number(optional("TELEGRAM_ADMIN_CHAT_ID", "0")),
     sandboxDir: optional("SANDBOX_DIR", "./sandbox"),
     claudeBin: optional("CLAUDE_BIN", "claude"),
     allowedTools: csvList(
@@ -72,8 +73,11 @@ function buildConfig() {
     twilioPhoneNumber: optional("TWILIO_PHONE_NUMBER", ""),
     nicolasPhoneNumber: optional("NICOLAS_PHONE_NUMBER", ""),
 
-    // Gemini (image generation)
+    // Gemini (image generation + orchestrator)
     geminiApiKey: optional("GEMINI_API_KEY", ""),
+    geminiOrchestratorEnabled: optional("GEMINI_ORCHESTRATOR_ENABLED", "true") === "true",
+    geminiOrchestratorModel: optional("GEMINI_ORCHESTRATOR_MODEL", "gemini-2.0-flash"),
+    geminiTimeoutMs: Number(optional("GEMINI_TIMEOUT_MS", "60000")),
 
     // Anthropic API (for vision / computer-use)
     anthropicApiKey: optional("ANTHROPIC_API_KEY", ""),
@@ -93,6 +97,12 @@ function buildConfig() {
 
     // Brave Search
     braveSearchApiKey: optional("BRAVE_SEARCH_API_KEY", ""),
+
+    // Dashboard
+    dashboardToken: optional("DASHBOARD_TOKEN", ""),
+
+    // Tool profiles (OpenClaw-like): "default" | "coding" | "automation" | "full"
+    toolProfile: optional("TOOL_PROFILE", "full") as "default" | "coding" | "automation" | "full",
 
     // OpenClaw enhancements
     reactionsEnabled: optional("REACTIONS_ENABLED", "true") === "true",
@@ -118,8 +128,12 @@ export const config: ReturnType<typeof buildConfig> = buildConfig();
 
 export function reloadEnv(): void {
   dotenv.config({ override: true });
-  Object.assign(config, buildConfig());
-  log.info("[config] Environment reloaded");
+  try {
+    Object.assign(config, buildConfig());
+    log.info("[config] Environment reloaded");
+  } catch (err) {
+    log.warn(`[config] Reload failed (missing required var?): ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 export function watchEnv(): void {

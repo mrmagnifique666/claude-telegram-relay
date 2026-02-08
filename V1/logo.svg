@@ -1,0 +1,51 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background gradient circle -->
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#8b5cf6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#ec4899;stop-opacity:1" />
+    </linearGradient>
+    
+    <linearGradient id="textGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#e0e7ff;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Glow effect -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Main circle -->
+  <circle cx="100" cy="100" r="90" fill="url(#bgGradient)" filter="url(#glow)"/>
+  
+  <!-- Q letter -->
+  <text x="60" y="135" font-family="Arial, sans-serif" font-size="90" font-weight="bold" fill="url(#textGradient)">Q</text>
+  
+  <!-- Plus signs (++) -->
+  <g transform="translate(130, 70)">
+    <!-- First + -->
+    <rect x="0" y="10" width="25" height="8" rx="4" fill="#ffffff" opacity="0.95"/>
+    <rect x="8.5" y="1.5" width="8" height="25" rx="4" fill="#ffffff" opacity="0.95"/>
+    
+    <!-- Second + -->
+    <rect x="0" y="45" width="25" height="8" rx="4" fill="#ffffff" opacity="0.9"/>
+    <rect x="8.5" y="36.5" width="8" height="25" rx="4" fill="#ffffff" opacity="0.9"/>
+  </g>
+  
+  <!-- Decorative elements - neural network style connections -->
+  <g opacity="0.3">
+    <circle cx="40" cy="40" r="3" fill="#ffffff"/>
+    <circle cx="160" cy="160" r="3" fill="#ffffff"/>
+    <circle cx="160" cy="40" r="3" fill="#ffffff"/>
+    <line x1="40" y1="40" x2="100" y2="100" stroke="#ffffff" stroke-width="1"/>
+    <line x1="160" y1="40" x2="100" y2="100" stroke="#ffffff" stroke-width="1"/>
+    <line x1="100" y1="100" x2="160" y2="160" stroke="#ffffff" stroke-width="1"/>
+  </g>
+</svg>

@@ -7,14 +7,28 @@ import { registerSkill } from "../loader.js";
 import { config } from "../../config/env.js";
 
 const BLOCKED_PATTERNS = [
-  /rm\s+(-[a-z]*)?r.*\//i, // rm -rf /
+  /rm\s+(-[a-z]*)?r.*\//i,     // rm -rf /
   /mkfs/i,
   /dd\s+.*of=\/dev/i,
-  /format\s+[a-z]:/i, // Windows format
+  /format\s+[a-z]:/i,           // Windows format
   /shutdown/i,
   /reboot/i,
   /init\s+0/i,
-  /:(){ :\|:& };:/,  // fork bomb
+  /:(){ :\|:& };:/,             // fork bomb
+  />\s*\/dev\/sd[a-z]/i,        // overwrite disk
+  /chmod\s+(-R\s+)?777\s+\//i,  // recursive 777 on root
+  /curl\s.*\|\s*(ba)?sh/i,      // pipe curl to shell
+  /wget\s.*\|\s*(ba)?sh/i,      // pipe wget to shell
+  /net\s+user/i,                 // Windows user manipulation
+  /reg\s+(add|delete)/i,         // Windows registry modification
+  /powershell.*-enc/i,           // encoded PowerShell (obfuscation)
+  /\benv\b.*TELEGRAM_BOT_TOKEN/i, // env var leak: bot token
+  /\benv\b.*API_KEY/i,           // env var leak: API keys
+  /\benv\b.*SECRET/i,            // env var leak: secrets
+  /\benv\b.*PASSWORD/i,          // env var leak: passwords
+  /cat\s+.*\.env\b/i,            // read .env file directly
+  /type\s+.*\.env\b/i,           // Windows: read .env file
+  /printenv/i,                    // dump all environment variables
 ];
 
 registerSkill({
@@ -43,9 +57,23 @@ registerSkill({
       const shell = isWindows ? "cmd.exe" : "/bin/sh";
       const shellArg = isWindows ? "/c" : "-c";
 
+      // Strip sensitive env vars from child process
+      const {
+        TELEGRAM_BOT_TOKEN: _t,
+        ANTHROPIC_API_KEY: _a,
+        GEMINI_API_KEY: _g,
+        ADMIN_PASSPHRASE: _p,
+        TWILIO_AUTH_TOKEN: _tw,
+        DEEPGRAM_API_KEY: _d,
+        ELEVENLABS_API_KEY: _e,
+        BRAVE_SEARCH_API_KEY: _b,
+        ...safeEnv
+      } = process.env;
+
       const proc = spawn(shell, [shellArg, command], {
         stdio: ["ignore", "pipe", "pipe"],
         timeout: config.shellTimeout,
+        env: safeEnv,
       });
 
       let stdout = "";

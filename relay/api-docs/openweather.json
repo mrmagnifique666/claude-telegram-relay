@@ -1,0 +1,143 @@
+{
+  "url": "https://openweathermap.org/api",
+  "analysis": {
+    "base_url": "Not explicitly mentioned, but likely something like \"https://api.openweathermap.org/data/3.0\"",
+    "auth": {
+      "type": "api_key",
+      "header": "Not specified in documentation",
+      "prefix": null,
+      "env_var": null,
+      "signup_url": "Create account button in documentation"
+    },
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/weather",
+        "description": "Access current weather data for any location",
+        "params": [
+          {
+            "name": "q",
+            "type": "string",
+            "required": true,
+            "description": "City name"
+          }
+        ],
+        "response_example": "JSON, XML, and HTML formats"
+      },
+      {
+        "method": "GET",
+        "path": "/forecast/hourly",
+        "description": "Hourly forecast for 4 days",
+        "params": [
+          {
+            "name": "q",
+            "type": "string",
+            "required": true,
+            "description": "City name"
+          }
+        ],
+        "response_example": "JSON and XML formats"
+      },
+      {
+        "method": "GET",
+        "path": "/forecast/daily",
+        "description": "16 day daily forecast",
+        "params": [
+          {
+            "name": "q",
+            "type": "string",
+            "required": true,
+            "description": "City name"
+          }
+        ],
+        "response_example": "JSON and XML formats"
+      },
+      {
+        "method": "GET",
+        "path": "/forecast/climate",
+        "description": "30 day climate forecast",
+        "params": [
+          {
+            "name": "q",
+            "type": "string",
+            "required": true,
+            "description": "City name"
+          }
+        ],
+        "response_example": "JSON format"
+      },
+      {
+        "method": "GET",
+        "path": "/forecast",
+        "description": "5 day forecast with 3-hour step",
+        "params": [
+          {
+            "name": "q",
+            "type": "string",
+            "required": true,
+            "description": "City name"
+          }
+        ],
+        "response_example": "JSON and XML formats"
+      },
+      {
+        "method": "GET",
+        "path": "/air_pollution",
+        "description": "Current, forecast, and historical air pollution data",
+        "params": [
+          {
+            "name": "lat",
+            "type": "number",
+            "required": true,
+            "description": "Latitude"
+          },
+          {
+            "name": "lon",
+            "type": "number",
+            "required": true,
+            "description": "Longitude"
+          }
+        ],
+        "response_example": "Air Quality Index and indices for CO, NO, NO2, O3, SO2, NH3, PM2.5, PM10"
+      },
+      {
+        "method": "GET",
+        "path": "/geo/direct",
+        "description": "Geocoding API, direct method (city name to coordinates)",
+        "params": [
+          {
+            "name": "q",
+            "type": "string",
+            "required": true,
+            "description": "City name"
+          }
+        ],
+        "response_example": "Not specified"
+      },
+      {
+        "method": "GET",
+        "path": "/geo/reverse",
+        "description": "Geocoding API, reverse method (coordinates to city name)",
+        "params": [
+          {
+            "name": "lat",
+            "type": "number",
+            "required": true,
+            "description": "Latitude"
+          },
+          {
+            "name": "lon",
+            "type": "number",
+            "required": true,
+            "description": "Longitude"
+          }
+        ],
+        "response_example": "Not specified"
+      }
+    ],
+    "rate_limit": "Not explicitly mentioned, but likely exists based on subscription plan.",
+    "free_tier": "Some endpoints are available in both free and paid subscriptions. Check individual API documentation for details.",
+    "notes": "The base URL isn't explicitly defined and will depend on the specific API you are using.  The documentation focuses on the different API options rather than a single unified API. The documentation mentions One Call API 3.0 as a streamlined API request, but its actual base URL and authentication details are not readily available in this provided document.  You must sign up and create an account to get the API key."
+  },
+  "generatedAt": "2026-02-08T00:28:20.016Z"
+}

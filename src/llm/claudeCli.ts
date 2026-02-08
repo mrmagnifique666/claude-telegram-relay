@@ -11,10 +11,11 @@ import { spawn } from "node:child_process";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { parseClaudeOutput, type ParsedResult } from "./protocol.js";
-import { getTurns, getSession, saveSession } from "../storage/store.js";
+import { getTurns, getSession, saveSession, getDb } from "../storage/store.js";
 import { getToolCatalogPrompt } from "../skills/loader.js";
 import { getLifeboatPrompt } from "../orchestrator/lifeboat.js";
 import { getLearnedRulesPrompt } from "../memory/self-review.js";
+import { buildSemanticContext } from "../memory/semantic.js";
 
 const CLI_TIMEOUT_MS = config.cliTimeoutMs;
 
@@ -114,14 +115,71 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
 }
 
 /**
- * Build the full prompt: system policy + tool catalog + conversation history + current message.
+ * Build long-term memory context: recent notes + semantic memories + 48h conversation activity.
+ * Injected into both new and resumed sessions so Kingston remembers past interactions.
+ */
+async function buildMemoryContext(chatId: number, userMessage?: string): Promise<string> {
+  const db = getDb();
+  const parts: string[] = [];
+
+  // 1. Recent notes (Kingston's long-term memory)
+  try {
+    const notes = db
+      .prepare("SELECT id, text, created_at FROM notes ORDER BY id DESC LIMIT 15")
+      .all() as { id: number; text: string; created_at: number }[];
+    if (notes.length > 0) {
+      parts.push("[NOTES — Long-term memory]");
+      for (const n of notes.reverse()) {
+        const text = n.text.length > 200 ? n.text.slice(0, 200) + "..." : n.text;
+        parts.push(`#${n.id}: ${text}`);
+      }
+    }
+  } catch { /* notes table may not exist yet */ }
+
+  // 2. Semantic memory (relevant to current message)
+  if (userMessage) {
+    try {
+      const semanticCtx = await buildSemanticContext(userMessage, 10);
+      if (semanticCtx) {
+        parts.push("\n" + semanticCtx);
+      }
+    } catch { /* semantic memory not available yet */ }
+  }
+
+  // 3. Recent conversation activity (last 48h, user messages only, from this chat)
+  try {
+    const cutoff = Math.floor(Date.now() / 1000) - 48 * 3600;
+    const recentTurns = db
+      .prepare(
+        `SELECT role, content, created_at FROM turns
+         WHERE chat_id = ? AND created_at > ? AND role = 'user'
+         AND content NOT LIKE '[Tool %' AND content NOT LIKE '[AGENT:%' AND content NOT LIKE '[SCHEDULER%'
+         ORDER BY id DESC LIMIT 20`
+      )
+      .all(chatId, cutoff) as { role: string; content: string; created_at: number }[];
+    if (recentTurns.length > 0) {
+      parts.push("\n[RECENT ACTIVITY — last 48h user messages]");
+      for (const t of recentTurns.reverse()) {
+        const date = new Date(t.created_at * 1000);
+        const timeStr = date.toLocaleString("fr-CA", { hour: "2-digit", minute: "2-digit", hour12: false });
+        const content = t.content.length > 120 ? t.content.slice(0, 120) + "..." : t.content;
+        parts.push(`[${timeStr}] ${content}`);
+      }
+    }
+  } catch { /* turns query failed */ }
+
+  return parts.length > 0 ? parts.join("\n") : "";
+}
+
+/**
+ * Build the full prompt: system policy + tool catalog + memory + conversation history + current message.
  * Used only for new sessions (no --resume).
  */
-function buildFullPrompt(
+async function buildFullPrompt(
   chatId: number,
   userMessage: string,
   isAdmin: boolean
-): string {
+): Promise<string> {
   const parts: string[] = [];
 
   // System policy
@@ -131,6 +189,12 @@ function buildFullPrompt(
   const catalog = getToolCatalogPrompt(isAdmin);
   if (catalog) {
     parts.push(`\n[TOOLS]\n${catalog}`);
+  }
+
+  // Long-term memory (notes + semantic + 48h activity)
+  const memory = await buildMemoryContext(chatId, userMessage);
+  if (memory) {
+    parts.push(`\n${memory}`);
   }
 
   // Conversation history
@@ -158,39 +222,34 @@ export async function runClaude(
   chatId: number,
   userMessage: string,
   isAdmin: boolean = false,
-  modelOverride?: string
+  modelOverride?: string,
+  _retryCount: number = 0
 ): Promise<ParsedResult> {
   const existingSession = getSession(chatId);
   const isResume = !!existingSession;
 
-  // For resumed sessions, reinject identity + guidelines + learned rules + tool catalog.
-  // For new sessions, build the full prompt with system policy + tools + history.
+  // For resumed sessions: lightweight prompt — CLI already has full context in memory.
+  // Only inject identity reminder + memory context + the new message.
+  // For new sessions: full prompt with system policy + tools + history.
   let prompt: string;
   if (isResume) {
-    const catalog = getToolCatalogPrompt(isAdmin);
-    const catalogBlock = catalog ? `\n[TOOLS]\n${catalog}\n` : "";
-    const learnedRules = getLearnedRulesPrompt();
-    const rulesBlock = learnedRules ? `\n${learnedRules}\n` : "";
-    const lifeboat = chatId ? getLifeboatPrompt(chatId) : "";
-    const lifeboatBlock = lifeboat ? `\n${lifeboat}\n` : "";
+    const memory = await buildMemoryContext(chatId, userMessage);
+    const memoryBlock = memory ? `\n${memory}\n` : "";
     prompt = [
-      `[IDENTITY: You are Kingston. Never identify as Émile, OpenClaw, or Claude.]`,
+      `[IDENTITY: You are Kingston. Respond in the same language as the user (usually French).]`,
       `[Context: chatId=${chatId}, admin=${isAdmin}, date=${new Date().toISOString().split("T")[0]}]`,
-      `[GUIDELINES: EXECUTE IMMEDIATELY. Never ask permission. Chain tool calls autonomously. You have FULL admin access.]`,
-      rulesBlock,
-      lifeboatBlock,
-      catalogBlock,
+      memoryBlock,
       userMessage,
     ].join("\n");
   } else {
-    prompt = buildFullPrompt(chatId, userMessage, isAdmin);
+    prompt = await buildFullPrompt(chatId, userMessage, isAdmin);
   }
 
   log.debug(`Claude prompt length: ${prompt.length} (resume: ${isResume})`);
 
   return new Promise<ParsedResult>((resolve) => {
     const model = modelOverride || config.claudeModel;
-    const args = ["-p", "-", "--output-format", "json", "--model", model];
+    const args = ["-p", "-", "--output-format", "json", "--model", model, "--dangerously-skip-permissions"];
 
     if (isResume) {
       args.push("--resume", existingSession);
@@ -255,6 +314,12 @@ export async function runClaude(
       }
       if (!stdout.trim()) {
         log.warn("Claude CLI returned empty stdout. stderr:", stderr.slice(0, 500));
+        // Retry once on empty response (CLI may have been killed by tsx --watch restart)
+        if (_retryCount < 1) {
+          log.info(`[claudeCli] Empty response — retrying (attempt ${_retryCount + 1})...`);
+          resolve(runClaude(chatId, userMessage, isAdmin, modelOverride, _retryCount + 1));
+          return;
+        }
         resolve({
           type: "message",
           text: stderr.trim() || "(Claude returned an empty response)",

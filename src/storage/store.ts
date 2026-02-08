@@ -79,6 +79,24 @@ export function getDb(): Database.Database {
         error_msg TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_agent_runs_agent ON agent_runs(agent_id, started_at DESC);
+
+      CREATE TABLE IF NOT EXISTS memory_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL DEFAULT 'knowledge',
+        content TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        embedding TEXT,
+        salience REAL NOT NULL DEFAULT 0.5,
+        access_count INTEGER NOT NULL DEFAULT 0,
+        last_accessed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        source TEXT DEFAULT 'auto',
+        chat_id INTEGER,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_hash ON memory_items(content_hash);
+      CREATE INDEX IF NOT EXISTS idx_memory_category ON memory_items(category);
+      CREATE INDEX IF NOT EXISTS idx_memory_salience ON memory_items(salience DESC);
     `);
     // Migrate: add new columns to error_log if missing
     try {

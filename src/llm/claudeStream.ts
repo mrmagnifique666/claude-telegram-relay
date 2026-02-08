@@ -9,8 +9,11 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
-import { getTurns, getSession, saveSession } from "../storage/store.js";
+import { getTurns, getSession, saveSession, getDb } from "../storage/store.js";
 import { getToolCatalogPrompt } from "../skills/loader.js";
+import { getLifeboatPrompt } from "../orchestrator/lifeboat.js";
+import { getLearnedRulesPrompt } from "../memory/self-review.js";
+import { buildSemanticContext } from "../memory/semantic.js";
 
 export interface StreamResult {
   text: string;
@@ -43,9 +46,9 @@ function loadAutonomousPrompt(): string {
 
 function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
   const lines = [
-    `You are Kingston, an autonomous AI assistant operating through a Telegram relay on the user's machine.`,
-    `Your name is Kingston. You are proactive, capable, and concise.`,
-    `IMPORTANT: Your identity is Kingston. Never identify as Émile, OpenClaw, Claude, or any other name.`,
+    `You are Kingston, the AI running on Bastion OS — a personal AI fortress on the user's machine.`,
+    `Your name is Kingston. You are proactive, capable, and concise. Bastion is your operating system.`,
+    `IMPORTANT: Your identity is Kingston on Bastion. Never identify as Émile, OpenClaw, Claude, or any other name.`,
     ``,
     `## Environment`,
     `- Platform: ${os.platform()} ${os.arch()}`,
@@ -113,14 +116,90 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     lines.push("", autonomousPrompt);
   }
 
+  // Inject learned rules from MISS/FIX auto-graduation
+  const learnedRules = getLearnedRulesPrompt();
+  if (learnedRules) {
+    lines.push("", learnedRules);
+  }
+
+  // Inject context lifeboat if available
+  if (chatId) {
+    const lifeboat = getLifeboatPrompt(chatId);
+    if (lifeboat) {
+      lines.push("", lifeboat);
+    }
+  }
+
   return lines.join("\n");
 }
 
-function buildFullPrompt(chatId: number, userMessage: string, isAdmin: boolean): string {
+/**
+ * Build long-term memory context: recent notes + semantic memories + 48h conversation activity.
+ * Same as claudeCli.ts — injected into both new and resumed sessions.
+ */
+async function buildMemoryContext(chatId: number, userMessage?: string): Promise<string> {
+  const db = getDb();
+  const parts: string[] = [];
+
+  // 1. Recent notes (Kingston's long-term memory)
+  try {
+    const notes = db
+      .prepare("SELECT id, text, created_at FROM notes ORDER BY id DESC LIMIT 15")
+      .all() as { id: number; text: string; created_at: number }[];
+    if (notes.length > 0) {
+      parts.push("[NOTES — Long-term memory]");
+      for (const n of notes.reverse()) {
+        const text = n.text.length > 200 ? n.text.slice(0, 200) + "..." : n.text;
+        parts.push(`#${n.id}: ${text}`);
+      }
+    }
+  } catch { /* notes table may not exist yet */ }
+
+  // 2. Semantic memory (relevant to current message)
+  if (userMessage) {
+    try {
+      const semanticCtx = await buildSemanticContext(userMessage, 10);
+      if (semanticCtx) {
+        parts.push("\n" + semanticCtx);
+      }
+    } catch { /* semantic memory not available yet */ }
+  }
+
+  // 3. Recent conversation activity (last 48h, user messages only, from this chat)
+  try {
+    const cutoff = Math.floor(Date.now() / 1000) - 48 * 3600;
+    const recentTurns = db
+      .prepare(
+        `SELECT role, content, created_at FROM turns
+         WHERE chat_id = ? AND created_at > ? AND role = 'user'
+         AND content NOT LIKE '[Tool %' AND content NOT LIKE '[AGENT:%' AND content NOT LIKE '[SCHEDULER%'
+         ORDER BY id DESC LIMIT 20`
+      )
+      .all(chatId, cutoff) as { role: string; content: string; created_at: number }[];
+    if (recentTurns.length > 0) {
+      parts.push("\n[RECENT ACTIVITY — last 48h user messages]");
+      for (const t of recentTurns.reverse()) {
+        const date = new Date(t.created_at * 1000);
+        const timeStr = date.toLocaleString("fr-CA", { hour: "2-digit", minute: "2-digit", hour12: false });
+        const content = t.content.length > 120 ? t.content.slice(0, 120) + "..." : t.content;
+        parts.push(`[${timeStr}] ${content}`);
+      }
+    }
+  } catch { /* turns query failed */ }
+
+  return parts.length > 0 ? parts.join("\n") : "";
+}
+
+async function buildFullPrompt(chatId: number, userMessage: string, isAdmin: boolean): Promise<string> {
   const parts: string[] = [];
   parts.push(`[SYSTEM]\n${buildSystemPolicy(isAdmin, chatId)}`);
   const catalog = getToolCatalogPrompt(isAdmin);
   if (catalog) parts.push(`\n[TOOLS]\n${catalog}`);
+
+  // Long-term memory (notes + semantic + 48h activity)
+  const memory = await buildMemoryContext(chatId, userMessage);
+  if (memory) parts.push(`\n${memory}`);
+
   const turns = getTurns(chatId);
   if (turns.length > 0) {
     parts.push("\n[CONVERSATION HISTORY]");
@@ -147,222 +226,235 @@ export function runClaudeStream(
   const existingSession = getSession(chatId);
   const isResume = !!existingSession;
 
-  let prompt: string;
-  if (isResume) {
-    const catalog = getToolCatalogPrompt(isAdmin);
-    const catalogBlock = catalog ? `\n[TOOLS]\n${catalog}\n` : "";
-    prompt = [
-      `[IDENTITY: You are Kingston. Never identify as Émile, OpenClaw, or Claude.]`,
-      `[Context: chatId=${chatId}, admin=${isAdmin}, date=${new Date().toISOString().split("T")[0]}]`,
-      `[GUIDELINES: EXECUTE IMMEDIATELY. Never ask permission. Chain tool calls autonomously. You have FULL admin access.]`,
-      catalogBlock,
-      userMessage,
-    ].join("\n");
-  } else {
-    prompt = buildFullPrompt(chatId, userMessage, isAdmin);
-  }
-
-  const model = modelOverride || config.claudeModel;
-  const args = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", model];
-  if (isResume) {
-    args.push("--resume", existingSession);
-  }
-
-  log.debug(`[stream] Spawning Claude stream (resume=${isResume})`);
-
-  let proc: ChildProcess;
   let killed = false;
-  let accumulated = "";
-  let lineBuffer = "";
+  let proc: ChildProcess | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
 
-  // Strip ANTHROPIC_API_KEY so the CLI uses the Max plan, not the paid API
-  const { ANTHROPIC_API_KEY: _stripped, ...cliEnv } = process.env;
-  proc = spawn(config.claudeBin, args, {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: cliEnv,
-    shell: false,
-  });
-
-  const timer = setTimeout(() => {
-    killed = true;
-    proc.kill("SIGTERM");
-    callbacks.onError(new Error("Claude CLI stream timed out"));
-  }, config.cliTimeoutMs);
-
-  proc.stdout!.on("data", (chunk: Buffer) => {
-    lineBuffer += chunk.toString();
-    const lines = lineBuffer.split("\n");
-    lineBuffer = lines.pop() || ""; // Keep incomplete last line in buffer
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const event = JSON.parse(line);
-        handleStreamEvent(event);
-      } catch {
-        // Not JSON — may be plain text output, accumulate it
-        log.debug(`[stream] Non-JSON line: ${line.slice(0, 100)}`);
-      }
-    }
-  });
-
-  proc.stderr!.on("data", (chunk: Buffer) => {
-    log.debug(`[stream] stderr: ${chunk.toString().slice(0, 200)}`);
-  });
-
-  proc.stdin!.write(prompt);
-  proc.stdin!.end();
-
-  function handleStreamEvent(event: any): void {
-    // Handle content_block_delta events
-    if (event.type === "content_block_delta") {
-      const delta = event.delta;
-      if (delta?.type === "text_delta" && delta.text) {
-        accumulated += delta.text;
-        callbacks.onDelta(accumulated);
-      }
+  // Build prompt async, then spawn the CLI process
+  (async () => {
+    let prompt: string;
+    if (isResume) {
+      const memory = await buildMemoryContext(chatId, userMessage);
+      const memoryBlock = memory ? `\n${memory}\n` : "";
+      prompt = [
+        `[IDENTITY: You are Kingston. Respond in the same language as the user (usually French).]`,
+        `[Context: chatId=${chatId}, admin=${isAdmin}, date=${new Date().toISOString().split("T")[0]}]`,
+        memoryBlock,
+        userMessage,
+      ].join("\n");
+    } else {
+      prompt = await buildFullPrompt(chatId, userMessage, isAdmin);
     }
 
-    // Handle result event (final)
-    if (event.type === "result") {
-      const sessionId = event.session_id;
-      if (sessionId) {
-        saveSession(chatId, sessionId);
-      }
+    if (killed) return; // Cancelled while building prompt
 
-      const resultText = typeof event.result === "string" ? event.result : accumulated;
-      log.info(`[stream] Result received: ${resultText.length} chars, accumulated: ${accumulated.length} chars, event.result type: ${typeof event.result}`);
-      log.debug(`[stream] Result text (first 300): ${resultText.slice(0, 300)}`);
-
-      // Check if the result is a tool call
-      const toolCall = detectToolCall(resultText);
-      if (toolCall) {
-        log.info(`[stream] Detected tool_call: ${toolCall.tool}`);
-        callbacks.onComplete({
-          text: resultText,
-          session_id: sessionId,
-          is_tool_call: true,
-          tool: toolCall.tool,
-          args: toolCall.args,
-        });
-      } else {
-        log.info(`[stream] Plain text response (no tool call)`);
-        callbacks.onComplete({
-          text: resultText,
-          session_id: sessionId,
-          is_tool_call: false,
-        });
-      }
+    const model = modelOverride || config.claudeModel;
+    const cliArgs = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", model, "--dangerously-skip-permissions"];
+    if (isResume) {
+      cliArgs.push("--resume", existingSession);
     }
 
-    // Handle message_start with session info
-    if (event.type === "message_start" && event.message?.id) {
-      log.debug(`[stream] Message started: ${event.message.id}`);
-    }
-  }
+    log.debug(`[stream] Spawning Claude stream (resume=${isResume})`);
 
-  proc.on("error", (err) => {
-    clearTimeout(timer);
-    callbacks.onError(err);
-  });
+    const { ANTHROPIC_API_KEY: _stripped, ...cliEnv } = process.env;
+    proc = spawn(config.claudeBin, cliArgs, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: cliEnv,
+      shell: false,
+    });
 
-  proc.on("close", (code) => {
-    clearTimeout(timer);
-    if (killed) return; // Already handled via timeout
+    timer = setTimeout(() => {
+      killed = true;
+      proc?.kill("SIGTERM");
+      callbacks.onError(new Error("Claude CLI stream timed out"));
+    }, config.cliTimeoutMs);
 
-    // Process any remaining line buffer
-    if (lineBuffer.trim()) {
-      try {
-        const event = JSON.parse(lineBuffer);
-        handleStreamEvent(event);
-      } catch {
-        // If we have accumulated text but no result event, emit it
-        if (accumulated) {
-          const toolCall = detectToolCall(accumulated);
-          if (toolCall) {
-            callbacks.onComplete({
-              text: accumulated,
-              is_tool_call: true,
-              tool: toolCall.tool,
-              args: toolCall.args,
-            });
-          } else {
-            callbacks.onComplete({ text: accumulated, is_tool_call: false });
-          }
-        } else if (lineBuffer.trim()) {
-          // Last resort — treat non-JSON output as text result
-          callbacks.onComplete({ text: lineBuffer.trim(), is_tool_call: false });
+    // Stall detection: if no output for 90 seconds, kill the stream
+    let lastActivity = Date.now();
+    const stallInterval = setInterval(() => {
+      if (Date.now() - lastActivity > 90_000) {
+        clearInterval(stallInterval);
+        if (!killed) {
+          killed = true;
+          log.warn(`[stream] No output for 90s — killing stalled stream`);
+          proc?.kill("SIGTERM");
+          callbacks.onError(new Error("Claude CLI stream stalled (no output for 90s)"));
         }
       }
-    } else if (!accumulated && code !== 0) {
-      callbacks.onError(new Error(`Claude CLI exited with code ${code}`));
-    } else if (accumulated) {
-      // Stream ended without a result event — finalize what we have
-      const toolCall = detectToolCall(accumulated);
-      callbacks.onComplete({
-        text: accumulated,
-        is_tool_call: !!toolCall,
-        tool: toolCall?.tool,
-        args: toolCall?.args,
-      });
-    } else {
-      // Stream ended cleanly (code 0) with NO output — must still resolve the promise
-      log.warn(`[stream] CLI exited cleanly but produced no output`);
-      callbacks.onComplete({ text: "", is_tool_call: false });
+    }, 10_000);
+
+    let accumulated = "";
+    let lineBuffer = "";
+
+    function handleStreamEvent(event: any): void {
+      if (event.type === "content_block_delta") {
+        const delta = event.delta;
+        if (delta?.type === "text_delta" && delta.text) {
+          accumulated += delta.text;
+          callbacks.onDelta(accumulated);
+        }
+      }
+
+      if (event.type === "result") {
+        const sessionId = event.session_id;
+        if (sessionId) {
+          saveSession(chatId, sessionId);
+        }
+
+        const resultText = typeof event.result === "string" ? event.result : accumulated;
+        log.info(`[stream] Result received: ${resultText.length} chars, accumulated: ${accumulated.length} chars, event.result type: ${typeof event.result}`);
+        log.debug(`[stream] Result text (first 300): ${resultText.slice(0, 300)}`);
+
+        const toolCall = detectToolCall(resultText);
+        if (toolCall) {
+          log.info(`[stream] Detected tool_call: ${toolCall.tool}`);
+          callbacks.onComplete({
+            text: resultText,
+            session_id: sessionId,
+            is_tool_call: true,
+            tool: toolCall.tool,
+            args: toolCall.args,
+          });
+        } else {
+          log.info(`[stream] Plain text response (no tool call)`);
+          callbacks.onComplete({
+            text: resultText,
+            session_id: sessionId,
+            is_tool_call: false,
+          });
+        }
+      }
+
+      if (event.type === "message_start" && event.message?.id) {
+        log.debug(`[stream] Message started: ${event.message.id}`);
+      }
     }
+
+    proc.stdout!.on("data", (chunk: Buffer) => {
+      lastActivity = Date.now();
+      lineBuffer += chunk.toString();
+      const lines = lineBuffer.split("\n");
+      lineBuffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line);
+          handleStreamEvent(event);
+        } catch {
+          log.debug(`[stream] Non-JSON line: ${line.slice(0, 100)}`);
+        }
+      }
+    });
+
+    proc.stderr!.on("data", (chunk: Buffer) => {
+      lastActivity = Date.now();
+      log.debug(`[stream] stderr: ${chunk.toString().slice(0, 200)}`);
+    });
+
+    proc.stdin!.write(prompt);
+    proc.stdin!.end();
+
+    proc.on("error", (err) => {
+      if (timer) clearTimeout(timer);
+      clearInterval(stallInterval);
+      callbacks.onError(err);
+    });
+
+    proc.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      clearInterval(stallInterval);
+      if (killed) return;
+
+      if (lineBuffer.trim()) {
+        try {
+          const event = JSON.parse(lineBuffer);
+          handleStreamEvent(event);
+        } catch {
+          if (accumulated) {
+            const toolCall = detectToolCall(accumulated);
+            if (toolCall) {
+              callbacks.onComplete({
+                text: accumulated,
+                is_tool_call: true,
+                tool: toolCall.tool,
+                args: toolCall.args,
+              });
+            } else {
+              callbacks.onComplete({ text: accumulated, is_tool_call: false });
+            }
+          } else if (lineBuffer.trim()) {
+            callbacks.onComplete({ text: lineBuffer.trim(), is_tool_call: false });
+          }
+        }
+      } else if (!accumulated && code !== 0) {
+        callbacks.onError(new Error(`Claude CLI exited with code ${code}`));
+      } else if (accumulated) {
+        const toolCall = detectToolCall(accumulated);
+        callbacks.onComplete({
+          text: accumulated,
+          is_tool_call: !!toolCall,
+          tool: toolCall?.tool,
+          args: toolCall?.args,
+        });
+      } else {
+        log.warn(`[stream] CLI exited cleanly but produced no output`);
+        callbacks.onError(new Error("Claude CLI produced no output (empty response)"));
+      }
+    });
+  })().catch((err) => {
+    callbacks.onError(err instanceof Error ? err : new Error(String(err)));
   });
 
   return {
     cancel() {
       killed = true;
-      clearTimeout(timer);
-      proc.kill("SIGTERM");
+      if (timer) clearTimeout(timer);
+      proc?.kill("SIGTERM");
     },
   };
+
+  // Note: stallInterval is cleaned up in close/error handlers above
 }
 
 /**
- * Detect if accumulated text contains a tool_call JSON.
+ * Detect if text contains a JSON tool_call.
+ * Tries pure JSON first (ideal case), then scans for the last
+ * {"type":"tool_call",...} block in case Claude prefixed thinking text.
+ * Tool name is validated against a strict pattern to prevent injection.
  */
 function detectToolCall(text: string): { tool: string; args: Record<string, unknown> } | null {
-  // Strip markdown fences
-  const stripped = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "");
+  const trimmed = text.trim();
+  if (!trimmed) return null;
 
-  const marker = /"type"\s*:\s*"tool_call"/;
-  const match = marker.exec(stripped);
-  if (!match) return null;
-
-  // Walk backwards to find opening brace
-  let start = match.index;
-  while (start > 0 && stripped[start] !== "{") start--;
-  if (stripped[start] !== "{") return null;
-
-  // Brace-matching to find complete JSON
-  let depth = 0;
-  let end = start;
-  let inString = false;
-  let escape = false;
-
-  for (let i = start; i < stripped.length; i++) {
-    const ch = stripped[i];
-    if (escape) { escape = false; continue; }
-    if (ch === "\\") { escape = true; continue; }
-    if (ch === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (ch === "{") depth++;
-    if (ch === "}") {
-      depth--;
-      if (depth === 0) { end = i; break; }
-    }
+  // Fast path: pure JSON (ideal case — no thinking text)
+  if (trimmed.startsWith("{")) {
+    const result = tryParseToolCall(trimmed);
+    if (result) return result;
   }
 
-  if (depth !== 0) return null;
+  // Slow path: Claude prefixed thinking text before the JSON.
+  // Find the last occurrence of {"type":"tool_call" in the text.
+  const marker = '{"type":"tool_call"';
+  const idx = trimmed.lastIndexOf(marker);
+  if (idx < 0) return null;
 
+  const jsonCandidate = trimmed.slice(idx);
+  return tryParseToolCall(jsonCandidate);
+}
+
+function tryParseToolCall(text: string): { tool: string; args: Record<string, unknown> } | null {
   try {
-    const obj = JSON.parse(stripped.slice(start, end + 1));
-    if (obj.type === "tool_call" && typeof obj.tool === "string") {
+    const obj = JSON.parse(text);
+    if (
+      obj &&
+      typeof obj === "object" &&
+      obj.type === "tool_call" &&
+      typeof obj.tool === "string" &&
+      /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/.test(obj.tool)
+    ) {
       return { tool: obj.tool, args: obj.args || {} };
     }
-  } catch { /* ignore */ }
+  } catch { /* not valid JSON */ }
   return null;
 }

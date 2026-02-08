@@ -1,0 +1,11 @@
+{
+  "goal": "Fixed agent chatId rewriting bug - agents can now send Telegram notifications to Nicolas",
+  "state": "Bug identified and resolved in src/orchestrator/router.ts line 157 - changed condition from truthy check to explicit > 0 check for config.adminChatId",
+  "nextAction": "System restart required for agents to use the corrected chatId rewriting logic",
+  "constraints": "Must preserve agent session isolation (chatIds 100-103) while enabling telegram.send to real admin chatId",
+  "unknowns": "Whether config.adminChatId is properly set in .env or if it defaults to 0",
+  "artifacts": "src/orchestrator/router.ts (line 157), commit 39ff5f4, MEMORY.md updated with fix documentation",
+  "stopConditions": "If agents still cannot send notifications after restart, verify config.adminChatId value in env.ts",
+  "timestamp": "2026-02-08T07:58:26.393Z",
+  "chatId": 2
+}

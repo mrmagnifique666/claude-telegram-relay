@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Kingston Dashboard</title>
+  <title>Bastion — Kingston Dashboard</title>
   <style>
     :root {
       --bg: #0d1117;
@@ -187,8 +187,28 @@
       padding: 12px 16px;
       border-top: 1px solid var(--border);
       background: var(--bg2);
-      display: flex;
+      display: grid;
+      grid-template-columns: 1fr auto;
       gap: 10px;
+      align-items: end;
+    }
+    .chat-controls {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .chat-controls select {
+      background: var(--bg3);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 12px;
+      outline: none;
+    }
+    .chat-controls select:focus {
+      border-color: var(--accent);
     }
     .chat-input-area textarea {
       flex: 1; background: var(--bg);
@@ -204,6 +224,13 @@
       border-radius: 8px; padding: 0 20px;
       font-size: 14px; font-weight: 600; cursor: pointer;
       transition: opacity 0.15s;
+    }
+    .chat-input-area button.secondary {
+      background: var(--bg3);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 0 12px;
+      min-height: 36px;
     }
     .chat-input-area button:hover { opacity: 0.85; }
     .chat-input-area button:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -403,6 +430,9 @@
         <div class="chat-tab emile" data-tab="emile" onclick="switchTab('emile')">
           Emile
         </div>
+        <div class="chat-tab" data-tab="aster" onclick="switchTab('aster')">
+          Aster
+        </div>
         <div class="chat-tab" data-tab="conseil" onclick="switchTab('conseil')"
           style="background: linear-gradient(135deg, rgba(88,166,255,.05), rgba(188,140,255,.05));">
           Conseil
@@ -425,6 +455,15 @@
         <span style="font-size:11px; color:var(--text2); align-self:center;" id="rounds-label"></span>
       </div>
       <div class="chat-input-area">
+        <div class="chat-controls">
+          <select id="direct-target" onchange="updateDirectTargetUi()">
+            <option value="active">Destinataire: onglet actif</option>
+            <option value="kingston">Destinataire: Kingston</option>
+            <option value="emile">Destinataire: Emile</option>
+            <option value="both">Destinataire: Kingston + Emile</option>
+          </select>
+          <button class="secondary" id="prompt-btn" onclick="generateUltimatePrompt()">Prompt ultime</button>
+        </div>
         <textarea id="chat-input" rows="1" placeholder="Parle a Kingston..."
           onkeydown="handleKeyDown(event)"></textarea>
         <button id="send-btn" onclick="sendMessage()">Envoyer</button>
@@ -493,12 +532,23 @@
 let activeTab = 'kingston';
 let ws = null;
 // No more global sending lock — input is always available
+let typingSeq = 0;
+const CHAT_TIMEOUT_MS = 180000;
 
 const chatHistory = {
   kingston: [],
   emile: [],
+  aster: [],
   conseil: [],
 };
+
+function getDirectTarget() {
+  const select = document.getElementById('direct-target');
+  if (!select) return activeTab === 'emile' ? 'emile' : 'kingston';
+  const value = select.value;
+  if (value === 'kingston' || value === 'emile' || value === 'both') return value;
+  return activeTab === 'emile' ? 'emile' : 'kingston';
+}
 
 // ── WebSocket ───────────────────────────────────────────
 function connectWS() {
@@ -536,7 +586,50 @@ function handleWSEvent(msg) {
 // ── API Calls ───────────────────────────────────────────
 async function api(path) {
   const res = await fetch(`/api/${path}`);
-  return res.json();
+  const contentType = res.headers.get('content-type') || '';
+  let data;
+  if (contentType.includes('application/json')) {
+    data = await res.json();
+  } else {
+    const text = await res.text();
+    data = { ok: false, error: text || `HTTP ${res.status}` };
+  }
+  if (!res.ok || data.ok === false) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+async function postChat(agent, message) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent, message }),
+    signal: controller.signal,
+  });
+  try {
+    const contentType = res.headers.get('content-type') || '';
+    let data;
+    if (contentType.includes('application/json')) {
+      data = await res.json();
+    } else {
+      const text = await res.text();
+      data = { ok: false, error: text || `HTTP ${res.status}` };
+    }
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    return data.response || 'No response.';
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error('Timeout: aucune reponse du serveur apres 90s');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function refreshAgents() {
@@ -827,30 +920,56 @@ function drawTrendChart(trends) {
 }
 
 // ── Chat ────────────────────────────────────────────────
+function updateDirectTargetUi() {
+  const btn = document.getElementById('send-btn');
+  const target = getDirectTarget();
+  if (activeTab === 'conseil') return;
+
+  if (target === 'emile') {
+    btn.className = 'emile-btn';
+    btn.style.background = 'var(--purple)';
+  } else if (target === 'both') {
+    btn.className = 'conseil-btn';
+    btn.style.background = 'linear-gradient(135deg, var(--accent), var(--purple))';
+  } else {
+    btn.className = '';
+    btn.style.background = 'var(--accent)';
+  }
+}
+
 function switchTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.chat-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.tab === tab);
   });
   const input = document.getElementById('chat-input');
-  const btn = document.getElementById('send-btn');
   const continueBar = document.getElementById('continue-bar');
+  const targetSelect = document.getElementById('direct-target');
 
   if (tab === 'emile') {
     input.placeholder = 'Parle a Emile...';
-    btn.className = 'emile-btn';
-    btn.style.background = 'var(--purple)';
+    targetSelect.disabled = false;
+    updateDirectTargetUi();
+    continueBar.style.display = 'none';
+  } else if (tab === 'aster') {
+    input.placeholder = 'Aster parle a Kingston + Emile...';
+    targetSelect.disabled = true;
+    const btn = document.getElementById('send-btn');
+    btn.className = 'conseil-btn';
+    btn.style.background = 'linear-gradient(135deg, var(--accent), var(--purple))';
     continueBar.style.display = 'none';
   } else if (tab === 'conseil') {
     input.placeholder = 'Pose une question aux deux...';
+    targetSelect.disabled = true;
+    const btn = document.getElementById('send-btn');
     btn.className = 'conseil-btn';
     btn.style.background = 'linear-gradient(135deg, var(--accent), var(--purple))';
     // Show continue bar if there are messages
     continueBar.style.display = chatHistory.conseil.length > 1 ? 'flex' : 'none';
   } else {
     input.placeholder = 'Parle a Kingston...';
-    btn.className = '';
-    btn.style.background = 'var(--accent)';
+    targetSelect.disabled = false;
+    updateDirectTargetUi();
     continueBar.style.display = 'none';
   }
   renderChat();
@@ -868,7 +987,7 @@ function renderChat() {
       return `<div class="msg msg-user">${escapeHtml(m.content)}</div>`;
     }
     // Assistant messages — in conseil mode, show who is speaking
-    if (activeTab === 'conseil' && m.agent) {
+    if ((activeTab === 'conseil' || activeTab === 'aster') && m.agent) {
       const agentCls = m.agent === 'kingston' ? 'kingston-msg' : 'emile-msg';
       const labelCls = m.agent === 'kingston' ? 'kingston' : 'emile';
       const label = m.agent === 'kingston' ? 'KINGSTON' : 'EMILE';
@@ -892,15 +1011,19 @@ function addMessage(tab, role, content) {
 function showTyping() {
   const container = document.getElementById('chat-messages');
   const el = document.createElement('div');
-  el.id = 'typing';
+  const id = `typing-${++typingSeq}`;
+  el.dataset.typingId = id;
   el.className = 'typing-indicator';
   el.innerHTML = '<span></span><span></span><span></span>';
   container.appendChild(el);
   container.scrollTop = container.scrollHeight;
+  return id;
 }
 
-function hideTyping() {
-  const el = document.getElementById('typing');
+function hideTyping(id) {
+  const el = id
+    ? document.querySelector(`[data-typing-id="${id}"]`)
+    : document.querySelector('.typing-indicator');
   if (el) el.remove();
 }
 
@@ -911,37 +1034,68 @@ async function sendMessage() {
 
   input.value = '';
   input.style.height = 'auto';
-  // Input stays enabled — user can always type
-
-  addMessage(activeTab, 'user', message);
+  // Input stays enabled - user can always type
 
   if (activeTab === 'conseil') {
-    // In conseil: inject user message, restart agent dialogue
-    conseilRunning = false; // stop current auto-dialogue if any
-    await sleep(300); // let current request finish gracefully
-    conseilSend(message); // fire and forget — don't await
-  } else if (activeTab === 'kingston') {
-    fetchAgent('kingston', '/api/chat/kingston', message);
-  } else {
-    fetchAgent('emile', '/api/chat/emile', message);
+    addMessage('conseil', 'user', message);
+    conseilRunning = false;
+    await sleep(300);
+    conseilSend(message);
+    return;
+  }
+
+  if (activeTab === 'aster') {
+    addMessage('aster', 'user', message);
+    fetchAsterParallel(message);
+    return;
+  }
+
+  const target = getDirectTarget();
+  if (target === 'both') {
+    addMessage('kingston', 'user', message);
+    addMessage('emile', 'user', message);
+    if (activeTab !== 'kingston' && activeTab !== 'emile') {
+      addMessage(activeTab, 'system', 'Message envoye a Kingston et Emile.');
+    }
+    fetchAgent('kingston', message);
+    fetchAgent('emile', message);
+    return;
+  }
+
+  addMessage(target, 'user', message);
+  if (activeTab !== target) {
+    addMessage(activeTab, 'system', `Message envoye a ${target === 'emile' ? 'Emile' : 'Kingston'}.`);
+  }
+  fetchAgent(target, message);
+}
+// Fire-and-forget agent call — never blocks input
+async function fetchAgent(agent, message) {
+  const typingId = showTyping();
+  try {
+    const response = await postChat(agent, message);
+    hideTyping(typingId);
+    addMessage(agent, 'assistant', response);
+  } catch (err) {
+    hideTyping(typingId);
+    addMessage(agent, 'system', `Erreur: ${err.message}`);
   }
 }
 
-// Fire-and-forget agent call — never blocks input
-async function fetchAgent(tab, endpoint, message) {
-  showTyping();
+function fetchAsterParallel(message) {
+  fetchAgentForTab('aster', 'kingston', message);
+  fetchAgentForTab('aster', 'emile', message);
+}
+
+async function fetchAgentForTab(tab, agent, message) {
+  const typingId = showTyping();
   try {
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
-    });
-    const data = await res.json();
-    hideTyping();
-    addMessage(tab, 'assistant', data.response || 'No response.');
+    const response = await postChat(agent, message);
+    hideTyping(typingId);
+    chatHistory[tab].push({ role: 'assistant', content: response, agent });
+    if (activeTab === tab) renderChat();
   } catch (err) {
-    hideTyping();
-    addMessage(tab, 'system', `Erreur: ${err.message}`);
+    hideTyping(typingId);
+    addMessage(tab, 'system', `Erreur ${agent}: ${err.message}`);
   }
 }
 
@@ -1028,22 +1182,15 @@ async function autoDialogue() {
 }
 
 async function agentRespond(agent, prompt) {
-  showTyping();
+  const typingId = showTyping();
   try {
-    const endpoint = agent === 'kingston' ? '/api/chat/kingston' : '/api/chat/emile';
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: prompt }),
-    });
-    const data = await res.json();
-    const response = data.response || 'No response.';
-    hideTyping();
+    const response = await postChat(agent, prompt);
+    hideTyping(typingId);
     chatHistory.conseil.push({ role: 'assistant', content: response, agent });
     renderChat();
     return response;
   } catch (err) {
-    hideTyping();
+    hideTyping(typingId);
     const errMsg = `Erreur ${agent}: ${err.message}`;
     addMessage('conseil', 'system', errMsg);
     conseilRunning = false;
@@ -1060,6 +1207,73 @@ function buildContext() {
       return `${label}: ${m.content}`;
     })
     .join('\n\n');
+}
+
+function getLatestUserGoal() {
+  const input = document.getElementById('chat-input');
+  const draft = (input.value || '').trim();
+  if (draft) return draft;
+
+  const source = chatHistory[activeTab] || [];
+  for (let i = source.length - 1; i >= 0; i--) {
+    if (source[i].role === 'user') return source[i].content;
+  }
+  return '';
+}
+
+function buildPromptContext() {
+  if (activeTab === 'conseil') return buildContext();
+  const source = chatHistory[activeTab] || [];
+  return source
+    .filter(m => m.role !== 'system')
+    .slice(-6)
+    .map(m => {
+      if (m.role === 'user') return `NICOLAS: ${m.content}`;
+      if (activeTab === 'aster' && m.agent) return `${m.agent.toUpperCase()}: ${m.content}`;
+      return `${activeTab.toUpperCase()}: ${m.content}`;
+    })
+    .join('\n\n');
+}
+
+async function generateUltimatePrompt() {
+  const goal = getLatestUserGoal();
+  const target = (activeTab === 'conseil' || activeTab === 'aster') ? 'both' : getDirectTarget();
+  const context = buildPromptContext();
+
+  try {
+    const res = await fetch('/api/chat/ultimate-prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        goal,
+        target,
+        context,
+        constraints: 'Favoriser changements concrets, verification, et rapport final actionnable.',
+      }),
+    });
+    const contentType = res.headers.get('content-type') || '';
+    let data;
+    if (contentType.includes('application/json')) {
+      data = await res.json();
+    } else {
+      const text = await res.text();
+      data = { ok: false, error: text || `HTTP ${res.status}` };
+    }
+    if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+
+    const prompt = data.prompt || '';
+    if (!prompt) throw new Error('Prompt vide');
+
+    try {
+      await navigator.clipboard.writeText(prompt);
+      addMessage(activeTab, 'system', 'Prompt ultime genere et copie dans le presse-papiers.');
+    } catch {
+      addMessage(activeTab, 'system', 'Prompt ultime genere (copie manuelle requise).');
+    }
+    addMessage(activeTab, 'assistant', prompt);
+  } catch (err) {
+    addMessage(activeTab, 'system', `Erreur prompt ultime: ${err.message}`);
+  }
 }
 
 async function continueDialogue(who) {
@@ -1161,11 +1375,13 @@ function escapeHtml(text) {
 // ── Init ────────────────────────────────────────────────
 async function init() {
   connectWS();
+  updateDirectTargetUi();
 
   // Add welcome messages
-  addMessage('kingston', 'system', 'Chat avec Kingston — ton assistant Telegram');
-  addMessage('emile', 'system', 'Chat avec Emile — architecte & strategie (Claude Sonnet via API)');
-  addMessage('conseil', 'system', 'Mode Conseil — Kingston et Emile collaborent sur le code. Donne un objectif, ils implementent ensemble tour par tour.');
+  addMessage('kingston', 'system', 'Chat direct Kingston. Tu peux aussi envoyer a Kingston + Emile via le select.');
+  addMessage('emile', 'system', 'Chat direct Emile. Utilise "Prompt ultime" pour produire un brief executable.');
+  addMessage('aster', 'system', 'Mode Aster: un message declenche Kingston + Emile en parallele, reponses taggees.');
+  addMessage('conseil', 'system', 'Mode Conseil: Kingston et Emile collaborent sur le code tour par tour.');
 
   // Initial data load
   await Promise.all([
@@ -1190,3 +1406,6 @@ init();
 </script>
 </body>
 </html>
+
+
+

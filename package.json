@@ -1,12 +1,13 @@
 {
-  "name": "claude-telegram-relay",
-  "version": "1.0.0",
-  "description": "Self-hosted Telegram relay for Claude Code CLI",
+  "name": "bastion",
+  "version": "2.0.0",
+  "description": "Bastion — Your personal AI fortress. Kingston runs here.",
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
-    "dev:node": "tsx --watch src/index.ts",
+    "dev:node": "tsx src/index.ts",
+    "dev:watch": "tsx --watch src/index.ts",
     "start:node": "tsx src/index.ts",
     "start:wrapper": "tsx src/wrapper.ts",
     "test": "bun test",

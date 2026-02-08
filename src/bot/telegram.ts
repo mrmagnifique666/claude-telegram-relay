@@ -73,14 +73,32 @@ async function downloadTelegramFile(
   const filePath = file.file_path;
   if (!filePath) throw new Error("Telegram returned no file_path");
 
-  const url = `https://api.telegram.org/file/bot${config.telegramToken}/${filePath}`;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`Failed to download file: ${resp.status}`);
+  // Sanitize filename: strip path separators to prevent directory traversal
+  const safeName = path.basename(filename).replace(/[\\/:*?"<>|]/g, "_");
+  if (!safeName || safeName === "." || safeName === "..") {
+    throw new Error("Invalid filename after sanitization");
+  }
 
-  const buffer = Buffer.from(await resp.arrayBuffer());
-  const localPath = path.resolve(config.uploadsDir, filename);
-  fs.writeFileSync(localPath, buffer);
-  return localPath;
+  const url = `https://api.telegram.org/file/bot${config.telegramToken}/${filePath}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
+  try {
+    const resp = await fetch(url, { signal: controller.signal });
+    if (!resp.ok) throw new Error(`Failed to download file: ${resp.status}`);
+
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    const localPath = path.resolve(config.uploadsDir, safeName);
+
+    // Final guard: ensure resolved path is inside uploadsDir
+    if (!localPath.startsWith(path.resolve(config.uploadsDir))) {
+      throw new Error("Path traversal blocked");
+    }
+
+    fs.writeFileSync(localPath, buffer);
+    return localPath;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // --- sendLong (legacy fallback, used for non-streaming paths) ---
@@ -314,6 +332,12 @@ export function createBot(): Bot {
         if (config.streamingEnabled) {
           const draft = createDraftController(bot, chatId);
           let response: string;
+
+          // Long-processing feedback: send typing + notice if response takes > 25s
+          const longProcessTimer = setTimeout(async () => {
+            try { await bot.api.sendChatAction(chatId, "typing"); } catch { /* ignore */ }
+          }, 25_000);
+
           try {
             response = await handleMessageStreaming(chatId, messageWithMeta, userId, draft);
           } catch (streamErr) {
@@ -321,6 +345,8 @@ export function createBot(): Bot {
             log.warn(`[telegram] Streaming failed, falling back to batch: ${streamErr}`);
             await draft.cancel();
             response = await handleMessage(chatId, messageWithMeta, userId);
+          } finally {
+            clearTimeout(longProcessTimer);
           }
           const draftMsgId = draft.getMessageId();
           log.info(`[telegram] Streaming done: response=${response.length} chars, draftMsgId=${draftMsgId}`);
@@ -432,7 +458,8 @@ export function createBot(): Bot {
     const messageId = ctx.message.message_id;
     const caption = ctx.message.caption || "";
     const doc = ctx.message.document;
-    const originalName = doc.file_name || `file_${Date.now()}`;
+    const rawName = doc.file_name || `file_${Date.now()}`;
+    const originalName = path.basename(rawName).replace(/[\\/:*?"<>|]/g, "_");
 
     enqueue(chatId, async () => {
       const reaction = createReactionHandle(bot, chatId, messageId);
