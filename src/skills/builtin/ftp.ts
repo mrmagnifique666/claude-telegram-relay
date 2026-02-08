@@ -368,4 +368,93 @@ registerSkill({
   },
 });
 
-log.debug("Registered 7 ftp.* skills");
+// ── ftp.verify ──
+
+registerSkill({
+  name: "ftp.verify",
+  description:
+    "Verify that a deployed file on the FTP server actually contains expected content. Downloads the remote file and checks for a search string. MUST be used after ftp.upload or ftp.upload_dir to confirm deployment succeeded.",
+  adminOnly: true,
+  argsSchema: {
+    type: "object",
+    properties: {
+      remotePath: {
+        type: "string",
+        description: "Remote file path to verify (e.g. /public_html/index.html)",
+      },
+      search: {
+        type: "string",
+        description: "String to search for in the remote file content (e.g. 'lang=\"fr\"' or 'Bienvenue')",
+      },
+      notContains: {
+        type: "string",
+        description: "Optional: string that should NOT be in the file (e.g. old content that should have been replaced)",
+      },
+      host: { type: "string", description: "FTP hostname (or set FTP_HOST)" },
+      user: { type: "string", description: "FTP username (or set FTP_USER)" },
+      password: { type: "string", description: "FTP password (or set FTP_PASSWORD)" },
+      port: { type: "number", description: "Port (default 21)" },
+      secure: { type: "string", description: "Use FTPS: yes/no" },
+    },
+    required: ["remotePath", "search"],
+  },
+  async execute(args): Promise<string> {
+    const cfg = getFtpConfig(args);
+    const err = validateConfig(cfg);
+    if (err) return err;
+
+    const remotePath = args.remotePath as string;
+    const search = args.search as string;
+    const notContains = args.notContains as string | undefined;
+
+    // Download to temp file
+    const tmpDir = path.join(process.cwd(), "relay", "tmp");
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    const tmpFile = path.join(tmpDir, `verify_${Date.now()}.tmp`);
+
+    try {
+      await withClient(cfg, (client) => client.downloadTo(tmpFile, remotePath));
+
+      const content = fs.readFileSync(tmpFile, "utf-8");
+      const fileSize = content.length;
+      const first200 = content.slice(0, 200).replace(/\n/g, " ");
+
+      const results: string[] = [];
+      results.push(`Remote file: ${remotePath} (${fileSize} chars)`);
+      results.push(`Preview: ${first200}...`);
+
+      // Check for expected content
+      const found = content.includes(search);
+      if (found) {
+        results.push(`✅ FOUND: "${search}" is present in the remote file.`);
+      } else {
+        results.push(`❌ NOT FOUND: "${search}" is NOT in the remote file. Deployment may have failed or the wrong file was uploaded.`);
+      }
+
+      // Check for content that should NOT be there
+      if (notContains) {
+        const stillPresent = content.includes(notContains);
+        if (stillPresent) {
+          results.push(`❌ STILL PRESENT: "${notContains}" was found — old content was NOT replaced.`);
+        } else {
+          results.push(`✅ REMOVED: "${notContains}" is no longer in the file.`);
+        }
+      }
+
+      // Overall verdict
+      const passed = found && (!notContains || !content.includes(notContains));
+      results.push(passed
+        ? "\n🟢 VERIFICATION PASSED — deployment confirmed."
+        : "\n🔴 VERIFICATION FAILED — the remote file does not match expectations. Do NOT tell the user it's done.");
+
+      return results.join("\n");
+    } catch (e) {
+      return `Verification failed (could not download remote file): ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      // Clean up temp file
+      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
+  },
+});
+
+log.debug("Registered 8 ftp.* skills");

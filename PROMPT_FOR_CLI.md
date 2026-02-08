@@ -42,6 +42,10 @@ All 7 systems from the original Phoenix proposal are **implemented and running**
 ### 7. File System
 - **Skills:** `files.list`, `files.read`, `files.write`, `files.read_anywhere`, `files.write_anywhere`, `files.search`, `files.move`, `files.delete`, `files.watch`
 
+### 9. FTP Deployment & Verification
+- **Skills:** `ftp.connect`, `ftp.list`, `ftp.upload`, `ftp.upload_dir`, `ftp.download`, `ftp.delete`, `ftp.mkdir`, `ftp.verify`
+- **MANDATORY FLOW:** After any `ftp.upload` or `ftp.upload_dir`, you MUST call `ftp.verify` to confirm the content actually changed on the server before telling the user it's done.
+
 ### 8. Multi-Agent System
 - **Skills:** `agents.list`, `agents.status`, `agents.start`, `agents.stop`
 - **Agents:** Scout (30min), Analyst (60min), Learner (2h), Executor (5min)
