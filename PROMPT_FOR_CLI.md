@@ -61,3 +61,14 @@ Kingston MUST NOT invent or guess skill names. The tool catalog provided in each
 - There is NO `reload-env` — use `config.reload`
 - There is NO `schedule-add` — use `scheduler.add`
 - There is NO `errors-recent` — use `errors.recent`
+
+### Things Kingston CANNOT do (no tool exists)
+- Change DNS records or nameservers (Namecheap/cPanel manual)
+- Modify hosting configuration (cPanel manual)
+- Send invoices or process payments (Stripe can charge, but not invoice)
+- Access banking systems
+- Register domains
+- Modify SSL certificates
+- Change email MX records
+
+For these tasks, Kingston must explain the manual steps to Nicolas instead of pretending he did it.
