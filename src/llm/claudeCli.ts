@@ -12,7 +12,7 @@ import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { parseClaudeOutput, type ParsedResult } from "./protocol.js";
 import { getTurns, getSession, saveSession, getDb } from "../storage/store.js";
-import { getToolCatalogPrompt } from "../skills/loader.js";
+import { getCompactToolCatalog } from "../skills/loader.js";
 import { getLifeboatPrompt } from "../orchestrator/lifeboat.js";
 import { getLearnedRulesPrompt } from "../memory/self-review.js";
 import { buildSemanticContext } from "../memory/semantic.js";
@@ -23,6 +23,17 @@ const CLI_TIMEOUT_MS = config.cliTimeoutMs;
 function loadAutonomousPrompt(): string {
   try {
     const p = path.resolve(process.cwd(), "AUTONOMOUS.md");
+    if (fs.existsSync(p)) {
+      return fs.readFileSync(p, "utf-8");
+    }
+  } catch { /* ignore */ }
+  return "";
+}
+
+/** Load SOUL.md if it exists */
+function loadSoulPrompt(): string {
+  try {
+    const p = path.resolve(process.cwd(), "relay", "SOUL.md");
     if (fs.existsSync(p)) {
       return fs.readFileSync(p, "utf-8");
     }
@@ -90,6 +101,12 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     `- You can execute code with code.run`,
     `- After modifying code, the bot must be restarted to apply changes.`,
   ];
+
+  // Inject SOUL.md personality (before AUTONOMOUS.md)
+  const soulPrompt = loadSoulPrompt();
+  if (soulPrompt) {
+    lines.push("", soulPrompt);
+  }
 
   // Append AUTONOMOUS.md content if it exists
   const autonomousPrompt = loadAutonomousPrompt();
@@ -185,10 +202,10 @@ async function buildFullPrompt(
   // System policy
   parts.push(`[SYSTEM]\n${buildSystemPolicy(isAdmin, chatId)}`);
 
-  // Tool catalog
-  const catalog = getToolCatalogPrompt(isAdmin);
+  // Tool catalog (compact — one line per namespace)
+  const catalog = getCompactToolCatalog(isAdmin);
   if (catalog) {
-    parts.push(`\n[TOOLS]\n${catalog}`);
+    parts.push(`\n[TOOLS — call with {"type":"tool_call","tool":"namespace.method","args":{...}}]\n${catalog}`);
   }
 
   // Long-term memory (notes + semantic + 48h activity)

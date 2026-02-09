@@ -10,7 +10,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { config } from "../config/env.js";
 import { log } from "../utils/log.js";
 import { getTurns, getSession, saveSession, getDb } from "../storage/store.js";
-import { getToolCatalogPrompt } from "../skills/loader.js";
+import { getCompactToolCatalog } from "../skills/loader.js";
 import { getLifeboatPrompt } from "../orchestrator/lifeboat.js";
 import { getLearnedRulesPrompt } from "../memory/self-review.js";
 import { buildSemanticContext } from "../memory/semantic.js";
@@ -37,6 +37,17 @@ export interface StreamHandle {
 function loadAutonomousPrompt(): string {
   try {
     const p = path.resolve(process.cwd(), "AUTONOMOUS.md");
+    if (fs.existsSync(p)) {
+      return fs.readFileSync(p, "utf-8");
+    }
+  } catch { /* ignore */ }
+  return "";
+}
+
+/** Load SOUL.md if it exists */
+function loadSoulPrompt(): string {
+  try {
+    const p = path.resolve(process.cwd(), "relay", "SOUL.md");
     if (fs.existsSync(p)) {
       return fs.readFileSync(p, "utf-8");
     }
@@ -110,6 +121,12 @@ function buildSystemPolicy(isAdmin: boolean, chatId?: number): string {
     `- You can execute code with code.run`,
     `- After modifying code, the bot must be restarted to apply changes.`,
   ];
+
+  // Inject SOUL.md personality (before AUTONOMOUS.md)
+  const soulPrompt = loadSoulPrompt();
+  if (soulPrompt) {
+    lines.push("", soulPrompt);
+  }
 
   const autonomousPrompt = loadAutonomousPrompt();
   if (autonomousPrompt) {
@@ -193,8 +210,8 @@ async function buildMemoryContext(chatId: number, userMessage?: string): Promise
 async function buildFullPrompt(chatId: number, userMessage: string, isAdmin: boolean): Promise<string> {
   const parts: string[] = [];
   parts.push(`[SYSTEM]\n${buildSystemPolicy(isAdmin, chatId)}`);
-  const catalog = getToolCatalogPrompt(isAdmin);
-  if (catalog) parts.push(`\n[TOOLS]\n${catalog}`);
+  const catalog = getCompactToolCatalog(isAdmin);
+  if (catalog) parts.push(`\n[TOOLS — call with {"type":"tool_call","tool":"namespace.method","args":{...}}]\n${catalog}`);
 
   // Long-term memory (notes + semantic + 48h activity)
   const memory = await buildMemoryContext(chatId, userMessage);

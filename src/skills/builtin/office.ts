@@ -48,27 +48,40 @@ function runPython(script: string, timeoutMs = 30000): Promise<string> {
 registerSkill({
   name: "office.document",
   description:
-    "Create a Word document (.docx). Provide a title, optional subtitle, and content as markdown-like text. Paragraphs separated by blank lines. Lines starting with # become headings.",
+    "Create a Word document (.docx). Pass the full document content as markdown in the 'content' field. The first '# Heading' line becomes the document title automatically. Use ## and ### for sub-headings, - for bullets, numbered lines (1. 2. etc.) for numbered lists.",
   argsSchema: {
     type: "object",
     properties: {
-      filename: { type: "string", description: 'Output filename (e.g. "report.docx")' },
-      title: { type: "string", description: "Document title" },
+      filename: { type: "string", description: 'Output filename (e.g. "report.docx" or "report")' },
+      title: { type: "string", description: "Document title (optional — auto-extracted from first # heading if omitted)" },
       subtitle: { type: "string", description: "Optional subtitle" },
-      content: { type: "string", description: "Document body. Use # for headings, blank lines for paragraphs, - for bullet points." },
+      content: { type: "string", description: "Full document body as markdown. # = title/h1, ## = h2, ### = h3, - or * = bullets, 1. = numbered list, blank lines = paragraph breaks." },
     },
-    required: ["filename", "title", "content"],
+    required: ["filename", "content"],
   },
   async execute(args): Promise<string> {
     ensureOutputDir();
     const filename = path.basename(String(args.filename)).replace(/[<>:"/\\|?*]/g, "_");
     const outPath = path.join(OUTPUT_DIR, filename.endsWith(".docx") ? filename : filename + ".docx");
-    const title = String(args.title);
+    let content = String(args.content);
+
+    // Auto-extract title from first # heading if not provided
+    let title = args.title ? String(args.title) : "";
+    if (!title) {
+      const match = content.match(/^#\s+(.+)$/m);
+      if (match) {
+        title = match[1].trim();
+        // Remove the title line from content so it's not duplicated
+        content = content.replace(/^#\s+.+\n?/, "").trim();
+      } else {
+        title = filename.replace(/\.docx$/i, "").replace(/[_-]/g, " ");
+      }
+    }
+
     const subtitle = args.subtitle ? String(args.subtitle) : "";
-    const content = String(args.content);
 
     const script = `
-import sys
+import sys, re
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -94,8 +107,12 @@ for line in content.split("\\n"):
         doc.add_heading(line[2:], level=1)
     elif line.startswith("- ") or line.startswith("* "):
         doc.add_paragraph(line[2:], style="List Bullet")
-    elif line.startswith("1. ") or line.startswith("2. ") or line.startswith("3. "):
-        doc.add_paragraph(line[3:], style="List Number")
+    elif re.match(r"^\\d+\\.\\s", line):
+        doc.add_paragraph(re.sub(r"^\\d+\\.\\s", "", line), style="List Number")
+    elif line.startswith("**") and line.endswith("**"):
+        p = doc.add_paragraph()
+        run = p.add_run(line.strip("*"))
+        run.bold = True
     else:
         doc.add_paragraph(line)
 

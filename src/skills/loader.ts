@@ -99,6 +99,49 @@ export function getToolCatalogPrompt(isAdmin: boolean = false): string {
   return lines.join("\n");
 }
 
+/**
+ * Compact tool catalog — groups skills by namespace, one line per namespace.
+ * Reduces prompt from ~50KB to ~3-5KB. Used by Claude CLI path.
+ * Format: `namespace: method(params), method2(params) — description`
+ */
+export function getCompactToolCatalog(isAdmin: boolean = false): string {
+  const skills = getAllSkills().filter((s) => !s.adminOnly || isAdmin);
+  if (skills.length === 0) return "";
+
+  // Group by namespace (prefix before first dot, or skill name if no dot)
+  const groups = new Map<string, string[]>();
+  for (const s of skills) {
+    const dotIdx = s.name.indexOf(".");
+    const ns = dotIdx > 0 ? s.name.slice(0, dotIdx) : s.name;
+    const method = dotIdx > 0 ? s.name.slice(dotIdx + 1) : s.name;
+    const params = Object.entries(s.argsSchema.properties)
+      .map(([k, v]) => `${k}:${v.type}`)
+      .join(", ");
+    const entry = `${method}(${params})`;
+    if (!groups.has(ns)) groups.set(ns, []);
+    groups.get(ns)!.push(entry);
+  }
+
+  const lines: string[] = [];
+  for (const [ns, methods] of groups) {
+    lines.push(`${ns}: ${methods.join(", ")}`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Get the full schema for a single skill — used in tool feedback loop.
+ * Returns a one-line description with full param details.
+ */
+export function getSkillSchema(name: string): string | null {
+  const skill = registry.get(name);
+  if (!skill) return null;
+  const params = Object.entries(skill.argsSchema.properties)
+    .map(([k, v]) => `${k}: ${v.type}${v.description ? ` — ${v.description}` : ""}`)
+    .join(", ");
+  return `${skill.name}(${params}): ${skill.description}`;
+}
+
 // --- Gemini function declarations ---
 
 /** Gemini type mapping: Kingston "string" → Gemini "STRING" */
@@ -130,6 +173,7 @@ const TIER1_PREFIXES = [
   "scheduler.", "errors.", "image.", "time.", "translate.", "git.", "memory.",
   "skills.", "ftp.", "contacts.", "gmail.", "calendar.", "phone.", "agents.",
   "config.", "weather.", "network.", "rss.", "math.", "hash.", "convert.",
+  "trading.", "mood.", "soul.",
 ];
 
 /** Tier 2 keywords: map keyword patterns to skill prefixes */
@@ -154,6 +198,7 @@ const TIER2_KEYWORDS: Array<{ keywords: string[]; prefix: string }> = [
   { keywords: ["experiment", "expérien"], prefix: "experiment." },
   { keywords: ["crypto", "bitcoin", "ethereum"], prefix: "crypto." },
   { keywords: ["stocks", "bourse", "action"], prefix: "stocks." },
+  { keywords: ["trading", "trade", "picks", "day trading", "alpaca", "acheter", "vendre"], prefix: "trading." },
   { keywords: ["security", "sécurité", "scan"], prefix: "security." },
   { keywords: ["audit"], prefix: "audit." },
   { keywords: ["health", "santé"], prefix: "health." },
@@ -272,6 +317,7 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/utils.js");
   await import("./builtin/health.js");
   await import("./builtin/market.js");
+  await import("./builtin/trading.js");
   await import("./builtin/twitter.js");
   await import("./builtin/linkedin.js");
   await import("./builtin/reddit.js");
@@ -305,6 +351,8 @@ export async function loadBuiltinSkills(): Promise<void> {
   await import("./builtin/tunnel.js");
   await import("./builtin/clipboard.js");
   await import("./builtin/power-tools.js");
+  await import("./builtin/soul.js");
+  await import("./builtin/mood.js");
   await import("./custom/code-request.js");
   await import("./custom/moltbook.js");
   await import("./custom/openweather.js");

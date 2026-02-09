@@ -5,7 +5,7 @@
  */
 import { isToolPermitted } from "../security/policy.js";
 import { isAdmin } from "../security/policy.js";
-import { getSkill, validateArgs } from "../skills/loader.js";
+import { getSkill, validateArgs, getSkillSchema } from "../skills/loader.js";
 import { runClaude } from "../llm/claudeCli.js";
 import { runClaudeStream, type StreamResult } from "../llm/claudeStream.js";
 import { runGemini, GeminiRateLimitError, GeminiSafetyError } from "../llm/gemini.js";
@@ -319,7 +319,11 @@ export async function handleMessage(
     await safeProgress(chatId, `⚙️ **${tool}**\n\`\`\`\n${preview}\n\`\`\``);
 
     // Feed tool result back to Claude for next step or final answer
-    const followUp = `[Tool "${tool}" returned]:\n${toolResult}`;
+    // Include skill schema hint so Claude knows the exact params for this tool
+    const schemaHint = getSkillSchema(tool);
+    const followUp = schemaHint
+      ? `[Tool "${tool}" — schema: ${schemaHint}]\n${toolResult}`
+      : `[Tool "${tool}" returned]:\n${toolResult}`;
     addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
     addTurn(chatId, { role: "user", content: followUp });
 
@@ -505,14 +509,26 @@ export async function handleMessageStreaming(
   };
 
   // Tool chaining loop — sonnet for follow-ups (keeps intelligence + personality)
+  // Global timeout prevents the chain from blocking the chat lock forever.
+  const TOOL_CHAIN_TIMEOUT_MS = 180_000; // 3 minutes max for entire tool chain
+  const toolChainStart = Date.now();
   const streamFollowUpModel = getModelId("sonnet");
   for (let step = 0; step < config.maxToolChain; step++) {
     if (result.type !== "tool_call") break;
+
+    // Safety: check tool chain timeout
+    if (Date.now() - toolChainStart > TOOL_CHAIN_TIMEOUT_MS) {
+      const msg = `La chaîne d'outils a pris trop de temps (${Math.round((Date.now() - toolChainStart) / 1000)}s). Réessaie.`;
+      log.warn(`[router-stream] Tool chain timeout after ${Math.round((Date.now() - toolChainStart) / 1000)}s`);
+      addTurn(chatId, { role: "assistant", content: msg });
+      return msg;
+    }
 
     const { tool, args: rawArgs } = result;
 
     if (!tool || typeof tool !== "string") {
       const errorMsg = "Tool call missing or invalid tool name.";
+      log.warn(`[router-stream] ${errorMsg}`);
       addTurn(chatId, { role: "assistant", content: errorMsg });
       return errorMsg;
     }
@@ -546,8 +562,9 @@ export async function handleMessageStreaming(
       addTurn(chatId, { role: "user", content: followUp });
       const batchResult = await runClaude(chatId, followUp, userIsAdmin, streamFollowUpModel);
       if (batchResult.type === "message") {
-        addTurn(chatId, { role: "assistant", content: batchResult.text });
-        return batchResult.text;
+        const text = batchResult.text || "Désolé, je n'ai pas pu répondre.";
+        addTurn(chatId, { role: "assistant", content: text });
+        return text;
       }
       result = batchResultToRouterResult(batchResult);
       continue;
@@ -566,8 +583,9 @@ export async function handleMessageStreaming(
       addTurn(chatId, { role: "user", content: followUp });
       const batchResult = await runClaude(chatId, followUp, userIsAdmin, streamFollowUpModel);
       if (batchResult.type === "message") {
-        addTurn(chatId, { role: "assistant", content: batchResult.text });
-        return batchResult.text;
+        const text = batchResult.text || "Désolé, je n'ai pas pu répondre.";
+        addTurn(chatId, { role: "assistant", content: text });
+        return text;
       }
       result = batchResultToRouterResult(batchResult);
       continue;
@@ -597,8 +615,9 @@ export async function handleMessageStreaming(
       addTurn(chatId, { role: "user", content: followUp });
       const batchResult = await runClaude(chatId, followUp, userIsAdmin, streamFollowUpModel);
       if (batchResult.type === "message") {
-        addTurn(chatId, { role: "assistant", content: batchResult.text });
-        return batchResult.text;
+        const text = batchResult.text || "Désolé, je n'ai pas pu répondre.";
+        addTurn(chatId, { role: "assistant", content: text });
+        return text;
       }
       result = batchResultToRouterResult(batchResult);
       continue;
@@ -607,46 +626,63 @@ export async function handleMessageStreaming(
     log.info(`[router-stream] Executing tool (step ${step + 1}): ${tool}`);
     let toolResult: string;
     try {
-      toolResult = await skill.execute(safeArgs);
+      // Timeout individual tool execution (2 minutes max per tool)
+      const execPromise = skill.execute(safeArgs);
+      const execTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Tool "${tool}" execution timed out (120s)`)), 120_000)
+      );
+      toolResult = await Promise.race([execPromise, execTimeout]);
     } catch (err) {
       const errorMsg = `Tool "${tool}" failed: ${err instanceof Error ? err.message : String(err)}`;
+      log.error(`[router-stream] ${errorMsg}`);
       const followUp = `[Tool "${tool}" error]:\n${errorMsg}`;
       addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
       addTurn(chatId, { role: "user", content: followUp });
       const batchResult = await runClaude(chatId, followUp, userIsAdmin, streamFollowUpModel);
       if (batchResult.type === "message") {
-        addTurn(chatId, { role: "assistant", content: batchResult.text });
-        return batchResult.text;
+        const text = batchResult.text || "Désolé, je n'ai pas pu répondre.";
+        addTurn(chatId, { role: "assistant", content: text });
+        return text;
       }
       result = batchResultToRouterResult(batchResult);
       continue;
     }
 
+    log.info(`[router-stream] Tool ${tool} completed (${toolResult.length} chars)`);
     const sPreview = toolResult.length > 200 ? toolResult.slice(0, 200) + "..." : toolResult;
     await safeProgress(chatId, `⚙️ **${tool}**\n\`\`\`\n${sPreview}\n\`\`\``);
 
-    const followUp = `[Tool "${tool}" returned]:\n${toolResult}`;
+    // Include skill schema hint so Claude knows the exact params for this tool
+    const sSchemaHint = getSkillSchema(tool);
+    const followUp = sSchemaHint
+      ? `[Tool "${tool}" — schema: ${sSchemaHint}]\n${toolResult}`
+      : `[Tool "${tool}" returned]:\n${toolResult}`;
     addTurn(chatId, { role: "assistant", content: `[called ${tool}]` });
     addTurn(chatId, { role: "user", content: followUp });
 
-    // For the final step (or if this is the last tool), try streaming the response
+    log.info(`[router-stream] Feeding tool result to Claude (step ${step + 1}, ${modelLabel("sonnet")})...`);
     const batchResult = await runClaude(chatId, followUp, userIsAdmin, streamFollowUpModel);
+    log.info(`[router-stream] Claude follow-up type: ${batchResult.type}, text: ${(batchResult.text || "").length} chars`);
     if (batchResult.type === "message") {
-      addTurn(chatId, { role: "assistant", content: batchResult.text });
-      backgroundExtract(chatId, userMessage, batchResult.text);
-      return batchResult.text;
+      const text = batchResult.text?.trim() || "Désolé, je n'ai pas pu générer de réponse.";
+      addTurn(chatId, { role: "assistant", content: text });
+      backgroundExtract(chatId, userMessage, text);
+      log.info(`[router-stream] Tool chain complete — returning ${text.length} chars`);
+      return text;
     }
     result = batchResultToRouterResult(batchResult);
   }
 
   if (result.type === "tool_call") {
     const msg = `Reached tool chain limit (${config.maxToolChain} steps).`;
+    log.warn(`[router-stream] ${msg}`);
     addTurn(chatId, { role: "assistant", content: msg });
     return msg;
   }
 
-  const text = result.type === "message" ? result.text : "(unexpected state)";
+  const text = result.type === "message" ? (result.text || "(unexpected state)") : "(unexpected state)";
   addTurn(chatId, { role: "assistant", content: text });
+  log.info(`[router-stream] Returning final text: ${text.length} chars`);
   return text;
 }
 
@@ -664,10 +700,9 @@ function runClaudeStreamAsync(
       onDelta(text: string) {
         if (draftSuppressed) return;
         // Detect tool_call JSON appearing anywhere in the stream
-        // If found, cancel the draft immediately — this is thinking text, not a real response
+        // If found, suppress further draft updates — main flow handles cancel
         if (text.includes('{"type":"tool_call"')) {
           draftSuppressed = true;
-          draft.cancel().catch(() => {});
           return;
         }
         draft.update(text).catch(() => {});

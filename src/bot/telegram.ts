@@ -18,6 +18,7 @@ import { enqueue } from "./chatLock.js";
 import { sendFormatted } from "./formatting.js";
 import { createDraftController } from "./draftMessage.js";
 import { compactContext } from "../orchestrator/compaction.js";
+import { emitHook } from "../hooks/hooks.js";
 
 const startTime = Date.now();
 
@@ -199,6 +200,8 @@ export function createBot(): Bot {
 
   bot.command("clear", async (ctx) => {
     const chatId = ctx.chat.id;
+    const userId = ctx.from?.id;
+    await emitHook("session:reset", { chatId, userId });
     clearTurns(chatId);
     clearSession(chatId);
     await ctx.reply("Conversation history and session cleared.");
@@ -206,6 +209,8 @@ export function createBot(): Bot {
 
   bot.command("new", async (ctx) => {
     const chatId = ctx.chat.id;
+    const userId = ctx.from?.id;
+    await emitHook("session:new", { chatId, userId });
     clearTurns(chatId);
     clearSession(chatId);
     await ctx.reply("Nouvelle conversation. Comment puis-je t'aider ?");
@@ -350,12 +355,27 @@ export function createBot(): Bot {
             try { await bot.api.sendChatAction(chatId, "typing"); } catch { /* ignore */ }
           }, 8_000);
 
+          // Global timeout: prevents the chat lock from blocking forever
+          // if the streaming + tool chain hangs.
+          const GLOBAL_STREAMING_TIMEOUT_MS = 660_000; // 11 minutes (above CLI_TIMEOUT to let CLI finish first)
+          const globalTimeout = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Global streaming timeout (${GLOBAL_STREAMING_TIMEOUT_MS / 1000}s)`)), GLOBAL_STREAMING_TIMEOUT_MS)
+          );
+
           try {
-            response = await handleMessageStreaming(chatId, messageWithMeta, userId, draft);
+            response = await Promise.race([
+              handleMessageStreaming(chatId, messageWithMeta, userId, draft),
+              globalTimeout,
+            ]);
           } catch (streamErr) {
-            log.warn(`[telegram] Streaming failed, falling back to batch: ${streamErr}`);
+            log.warn(`[telegram] Streaming/tool-chain failed, falling back to batch: ${streamErr}`);
             await draft.cancel();
-            response = await handleMessage(chatId, messageWithMeta, userId);
+            try {
+              response = await handleMessage(chatId, messageWithMeta, userId);
+            } catch (batchErr) {
+              log.error(`[telegram] Batch fallback also failed: ${batchErr}`);
+              response = "Désolé, je n'ai pas pu traiter ta demande. Réessaie avec /new pour repartir à zéro.";
+            }
           } finally {
             clearTimeout(interimTimer);
             clearInterval(typingInterval);
@@ -385,9 +405,13 @@ export function createBot(): Bot {
               } catch (sendErr) {
                 log.error(`[telegram] sendFormatted failed: ${sendErr}`);
                 // Last resort — send plain text directly
-                const plain = response.slice(0, 4000);
-                await bot.api.sendMessage(chatId, plain);
-                log.info(`[telegram] Sent plain fallback`);
+                try {
+                  const plain = response.slice(0, 4000);
+                  await bot.api.sendMessage(chatId, plain);
+                  log.info(`[telegram] Sent plain fallback`);
+                } catch (plainErr) {
+                  log.error(`[telegram] Even plain fallback failed: ${plainErr}`);
+                }
               }
             }
           }

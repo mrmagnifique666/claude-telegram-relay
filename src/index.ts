@@ -18,6 +18,8 @@ import { startAgents, shutdownAgents } from "./agents/startup.js";
 import { cleanupDatabase } from "./storage/store.js";
 import { startDashboard } from "./dashboard/server.js";
 import { isOllamaAvailable } from "./llm/ollamaClient.js";
+import { emitHook } from "./hooks/hooks.js";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -150,12 +152,33 @@ async function main() {
   // Load skills
   await loadBuiltinSkills();
 
-  // Ollama health check (non-blocking)
+  // Load hooks (after skills so they can use the skill registry)
+  await import("./hooks/builtin/session-memory.js");
+
+  // Ollama: auto-start + health check
   if (config.ollamaEnabled) {
-    isOllamaAvailable().then(ok => {
-      if (ok) log.info(`[ollama] 🦙 Ollama available (${config.ollamaModel} at ${config.ollamaUrl})`);
-      else log.warn(`[ollama] Ollama not reachable at ${config.ollamaUrl} — will fallback to Haiku`);
-    });
+    const startOllama = async () => {
+      const alreadyUp = await isOllamaAvailable();
+      if (alreadyUp) {
+        log.info(`[ollama] 🦙 Ollama already running (${config.ollamaModel} at ${config.ollamaUrl})`);
+        return;
+      }
+      log.info("[ollama] Starting ollama serve...");
+      const child = execFile("ollama", ["serve"], { detached: true, stdio: "ignore" });
+      child.unref();
+      // Wait up to 10s for Ollama to be ready
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        if (await isOllamaAvailable()) {
+          log.info(`[ollama] 🦙 Ollama started (${config.ollamaModel} at ${config.ollamaUrl})`);
+          return;
+        }
+      }
+      log.warn(`[ollama] Ollama not reachable after 10s — will fallback to Haiku`);
+    };
+    startOllama().catch(err =>
+      log.warn(`[ollama] Auto-start failed: ${err instanceof Error ? err.message : String(err)}`)
+    );
   }
 
   // Migrate notes to semantic memory (one-time, non-blocking)
@@ -217,6 +240,11 @@ async function main() {
   } catch (err) {
     log.error(`[telegram] Failed to start: ${err instanceof Error ? err.message : String(err)}`);
   }
+
+  // Emit startup hook (fire-and-forget)
+  emitHook("gateway:startup", {}).catch(err =>
+    log.warn(`[hooks] Startup hook error: ${err instanceof Error ? err.message : String(err)}`)
+  );
 }
 
 main().catch((err) => {

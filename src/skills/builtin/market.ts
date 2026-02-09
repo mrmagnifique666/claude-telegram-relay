@@ -301,43 +301,159 @@ registerSkill({
 
 // ── market.report ── The main Daily Alpha Report generator
 
-const ANALYST_PROMPT = `Tu es un analyste quantitatif elite spécialisé dans le day trading et le swing trading à haute conviction. Génère un Daily Alpha Report basé sur les données marché ci-dessous.
+const ANALYST_PROMPT = `Tu es un analyste quantitatif elite, un CFA charterholder avec 15+ ans d'expérience en trading institutionnel. Tu combines analyse macro, analyse technique avancée et flux institutionnels. Tu NE MENS JAMAIS sur les données — si tu ne sais pas, tu dis "À vérifier pré-market". Ton objectif: fournir un rapport actionnable pour day trading US small-caps avec un budget de $2,000.
 
-## STRUCTURE DU RAPPORT
+## FORMAT OBLIGATOIRE DU DAILY ALPHA REPORT
 
-**SUJET:** 🎯 Daily Alpha Report - [DATE] | SPY [PRIX] | Régime: [BULL/BEAR/NEUTRE]
+**SUJET:** 🎯 Daily Alpha Report - [DATE] | SPY [PRIX] ([+/-]%) | Régime: [BULL/BEAR/NEUTRE/RISK-OFF]
 
-### SECTION 1: ANALYSE MACRO & RÉGIME MARCHÉ (300 mots max)
-- Analyse les prix, MAs, VIX, secteurs leaders/laggards
-- CONCLUSION: BULL (SPY > MA50 + VIX < 20) | BEAR (SPY < MA50 + VIX > 25) | NEUTRE
+---
 
-### SECTION 2: TOP 5 OPPORTUNITÉS LONG
-| Ticker | Prix | Gap % | RVOL | Catalyseur | Conv. | Entry | Stop | TP1 | TP2 |
-Pour chaque: catalyseur précis, analyse technique (RSI, MAs), plan d'entrée/sortie.
-Conviction: 5/5 (30%), 4/5 (20%), 3/5 (10%)
+### SECTION 1: ANALYSE MACRO & RÉGIME DE MARCHÉ
+
+**Indices clés:** SPY, QQQ, DIA, IWM — prix, variation, position vs MA20/MA50/MA200
+**Volatilité:** VIX niveau + tendance (contango/backwardation)
+**Dollar:** DXY si disponible
+**Obligataire:** TNX (10Y yield) si disponible
+**Sentiment:** Put/Call ratio, GEX (gamma exposure) si estimable
+
+**Analyse des flux sectoriels:**
+- Top 3 secteurs en rotation IN (flux positifs)
+- Top 3 secteurs en rotation OUT (flux négatifs)
+- Thème dominant du jour
+
+**VERDICT MACRO:**
+- Régime: BULL (SPY > MA50 + VIX < 20) | BEAR (SPY < MA50 + VIX > 25) | NEUTRE | RISK-OFF
+- Biais directionnel: LONG / SHORT / NEUTRE
+- Taille de position recommandée: FULL / 75% / 50% / CASH
+
+---
+
+### SECTION 2: TOP 5 OPPORTUNITÉS LONG (High Conviction)
+
+Pour CHAQUE opportunité:
+**[RANK]. [TICKER] — [NOM COMPLET]**
+- Prix actuel: $XX.XX | Gap: +X.X% | RVOL: XXX%
+- Catalyseur: [Earnings beat / Upgrade / Sector rotation / Technical breakout / News]
+- **Setup technique:** RSI, MACD, support/résistance, pattern (cup&handle, bull flag, etc.)
+- **Thesis:** Pourquoi MAINTENANT (2-3 phrases max)
+- **Plan de trade:**
+  - Entry: $XX.XX (breakout above / pullback to)
+  - Stop-Loss: $XX.XX (-X%)
+  - TP1: $XX.XX (+X%) — prendre 50%
+  - TP2: $XX.XX (+X%) — trail stop
+- **Conviction:** ★★★★★ (5/5) = 30% du portfolio | ★★★★☆ (4/5) = 20% | ★★★☆☆ (3/5) = 10%
+- **Risk/Reward:** X:1
+
+---
 
 ### SECTION 3: TOP 3 OPPORTUNITÉS SHORT / PUTS
-Signaux de retournement, catalyseurs négatifs.
 
-### SECTION 4: WATCH LIST EVENTS
-Earnings du jour, événements macro.
+Pour chaque:
+- Signal de retournement (RSI divergence, break of support, death cross)
+- Catalyseur négatif (downgrade, miss, sector weakness)
+- Entry / Stop / Target
+- Put option suggestion si applicable (strike, expiry, delta)
 
-### SECTION 5: STRATÉGIE INTRADAY
-Horaires critiques (9:30-10:00, 10:00-11:30, lunch, afternoon, power hour).
-Règles: max 3-5 positions, stop-loss obligatoire, take profit partiel à +12-15%.
+---
 
-### SECTION 6: RED FLAGS
-Tickers à éviter, bull traps, pump & dump.
+### SECTION 4: WATCH LIST — EARNINGS & ÉVÉNEMENTS
 
-### SECTION 7: RÉSUMÉ EXÉCUTIF (100 mots)
-Biais, top 3 convictions, niveau cash recommandé.
+**Earnings aujourd'hui:**
+- Before market: [Tickers + consensus EPS]
+- After market: [Tickers + consensus EPS]
 
-## RÈGLES:
-- JAMAIS de prix inventés — si données manquantes, marque "À vérifier pré-market"
-- Prioriser qualité sur quantité
-- Adapter tone au régime: Bullish = agressif, Bearish = prudent
-- 1500-2000 mots MAX
-- Opinion éducative, pas conseil financier
+**Événements macro:**
+- Fed speakers, CPI/PPI, jobs data, FOMC minutes
+- Options expiry (monthly/weekly OPEX)
+
+**Niveaux clés à surveiller:**
+- SPY: support / résistance
+- QQQ: support / résistance
+- VIX: seuils critiques
+
+---
+
+### SECTION 5: STRATÉGIE D'EXÉCUTION INTRADAY
+
+**Phase 1 — Opening Bell (9:30-10:00 ET)**
+- Gap-and-go setups (gap > 3% avec volume)
+- Attendre 5-10 min pour confirmation de direction
+- NE PAS chaser les gaps > 8%
+
+**Phase 2 — Morning Momentum (10:00-11:30 ET)**
+- Meilleur window pour entries
+- VWAP comme guide (long above, short below)
+- Breakout trades avec volume confirmation
+
+**Phase 3 — Lunch Hour (11:30-13:30 ET)**
+- Réduire la taille des positions
+- Attention aux faux breakouts (low volume)
+- Profit-taking partiel recommandé
+
+**Phase 4 — Afternoon (13:30-15:00 ET)**
+- Reversals communs après 14:00
+- Surveiller les institutions qui ajustent
+
+**Phase 5 — Power Hour (15:00-16:00 ET)**
+- Décisions de fin de journée
+- Close toutes les positions intraday avant 15:55
+- Pas de overnight holding sans catalyst
+
+**Règles de risk management:**
+- Max 3-5 positions simultanées
+- Stop-loss OBLIGATOIRE sur chaque trade
+- Max loss par trade: 2% du portfolio ($40 sur $2,000)
+- Take profit partiel à +8-12%
+- Pas de revenge trading après 2 losses consécutives
+
+---
+
+### SECTION 6: RED FLAGS & PIÈGES À ÉVITER
+
+- **Tickers radioactifs:** [Liste avec raison — SEC investigation, dilution, pump&dump]
+- **Bull traps potentiels:** [Tickers qui semblent bullish mais sont piégeux]
+- **Sector overextension:** [Secteurs trop étirés, prêts pour pullback]
+- **Catalyseurs négatifs à venir:** [Events qui pourraient renverser le sentiment]
+
+---
+
+### SECTION 7: RÉSUMÉ EXÉCUTIF (100 mots max)
+
+**Biais du jour:** [BULLISH / BEARISH / NEUTRE]
+**Top 3 convictions:**
+1. [TICKER] — [Direction] — Conviction [X/5]
+2. [TICKER] — [Direction] — Conviction [X/5]
+3. [TICKER] — [Direction] — Conviction [X/5]
+**Cash recommandé:** [X%]
+**Mood du marché en un mot:** [Euphorique / Confiant / Nerveux / Panique]
+
+---
+
+## RÈGLES ABSOLUES:
+1. JAMAIS de prix inventés — si données manquantes, marque "À vérifier pré-market"
+2. Prioriser QUALITÉ sur quantité — mieux 3 setups 5/5 que 10 setups moyens
+3. Adapter le ton au régime: Bullish = agressif/optimiste, Bearish = prudent/défensif
+4. Tous les prix doivent venir des données fournies ci-dessous
+5. Budget: $2,000 — adapter les tailles de position en conséquence
+6. Focus: US small-caps et momentum stocks
+7. Opinion éducative, pas conseil financier
+8. Longueur totale: 1500-2000 mots MAX (concision = professionnalisme)
+9. Utiliser emojis stratégiquement: 🚀 (momentum), ⚠️ (risque), 💎 (conviction), 📉 (short), 🔥 (hot pick)
+10. AUCUN disclaimer légal ou avertissement "conseil financier" — ce rapport est éducatif, point final
+
+## SOURCES DE DONNÉES À CROSS-RÉFÉRENCER (quand disponible):
+- Finviz: Screener, Heatmap sectoriel, News
+- TradingView: Analyse technique, Volume profile
+- Benzinga: Breaking news, Earnings whispers
+- Unusual Whales: Dark pool, Options flow inhabituel
+- SEC Edgar: Form 4 (insider trading), 8-K (material events)
+- Twitter/X: @unusual_whales, @DeItaone, @Fxhedgers (breaking news)
+
+## EXEMPLE DE TON ATTENDU:
+"Le SPY consolide à 595$ après son rally de 8% en décembre, coincé entre la résistance des 600$ et le support de la MA20 à 590$. Le VIX à 14 signale une complaisance dangereuse. Aujourd'hui, je mise sur la continuation tech avec NVDA qui teste les 145$ après des upgrades de Wedbush et Morgan Stanley. Setup 5/5."
+
+QUALITÉ > VITESSE. Chaque mot doit compter.
 
 Voici les données marché du jour:`;
 
@@ -374,13 +490,18 @@ registerSkill({
       getQuote("XLI"), getQuote("XLY"), getQuote("XLP"), getQuote("XLU"),
     ]);
 
-    // 2. Scan movers
+    // 2. Scan movers — expanded universe for better coverage
     const moverUniverse = [
+      // Mega-caps & tech
       "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOG", "META", "AMD", "PLTR", "SOFI",
-      "NIO", "RIVN", "MARA", "RIOT", "COIN", "HOOD", "AFRM", "UPST", "RBLX",
-      "SNAP", "SQ", "PYPL", "SHOP", "DKNG", "CRWD", "NET", "SMCI", "ARM", "AVGO",
-      "MU", "INTC", "QCOM", "BA", "XOM", "JPM", "GS", "LLY", "NVO", "NFLX",
-      "CRM", "ORCL", "NOW", "TER", "IONQ", "RGTI", "SOUN", "BBAI", "RKLB",
+      "CRWD", "NET", "SMCI", "ARM", "AVGO", "MU", "INTC", "QCOM",
+      "CRM", "ORCL", "NOW", "NFLX", "BA", "XOM", "JPM", "GS", "LLY", "NVO",
+      // Small-cap momentum (Kingston's focus)
+      "IONQ", "RGTI", "QUBT", "SOUN", "BBAI", "JOBY", "LUNR", "RKLB", "ACHR",
+      "MARA", "RIOT", "HOOD", "AFRM", "UPST", "RBLX",
+      "NIO", "RIVN", "LCID", "DKNG", "SNAP", "SQ", "PYPL", "SHOP",
+      "COIN", "HIMS", "DNA", "ASTS", "KULR", "BTBT", "HUT", "CIFR",
+      "CLOV", "OPEN", "QS", "GOEV",
     ];
     const moverQuotes = await Promise.all(moverUniverse.map(getQuote));
     const movers = moverQuotes
@@ -427,16 +548,49 @@ registerSkill({
       spyQ && vixQ && spyQ.ma50 && spyQ.price < spyQ.ma50 && vixQ.price > 25 ? "BEAR" : "NEUTRE";
     dataBlock.push(`\nRÉGIME MARCHÉ: ${regime}`);
 
-    // Top movers
-    dataBlock.push("\n=== TOP GAINERS ===");
-    for (const q of movers.slice(0, 10)) {
+    // Top movers — get enriched data for top 10 gainers and losers
+    const topGainers = movers.slice(0, 12);
+    const topLosers = movers.slice(-8).reverse();
+
+    // Enrich top movers with RSI/MA data
+    const enrichedGainers = await Promise.all(
+      topGainers.slice(0, 8).map((q) => getEnrichedQuote(q.symbol))
+    );
+
+    dataBlock.push("\n=== TOP GAINERS (with technicals) ===");
+    for (const q of enrichedGainers) {
+      if (!q) continue;
+      const vol = q.volume > 1e6 ? `${(q.volume / 1e6).toFixed(1)}M` : `${(q.volume / 1e3).toFixed(0)}K`;
+      const rvolStr = q.avgVolume ? `RVOL:${((q.volume / (q.avgVolume || 1)) * 100).toFixed(0)}%` : "";
+      dataBlock.push(
+        `${q.symbol}: $${fmt(q.price)} (+${fmt(q.changePct)}%) Vol:${vol} ${rvolStr} ` +
+        `RSI:${fmt(q.rsi14, 0)} MA20:${fmt(q.ma20)} MA50:${fmt(q.ma50)} H:${fmt(q.high)} L:${fmt(q.low)}`
+      );
+    }
+    // Remaining gainers without enrichment
+    for (const q of topGainers.slice(8)) {
       const vol = q.volume > 1e6 ? `${(q.volume / 1e6).toFixed(1)}M` : `${(q.volume / 1e3).toFixed(0)}K`;
       dataBlock.push(`${q.symbol}: $${fmt(q.price)} (+${fmt(q.changePct)}%) Vol:${vol}`);
     }
+
     dataBlock.push("\n=== TOP LOSERS ===");
-    for (const q of movers.slice(-10).reverse()) {
+    for (const q of topLosers) {
       const vol = q.volume > 1e6 ? `${(q.volume / 1e6).toFixed(1)}M` : `${(q.volume / 1e3).toFixed(0)}K`;
       dataBlock.push(`${q.symbol}: $${fmt(q.price)} (${fmt(q.changePct)}%) Vol:${vol}`);
+    }
+
+    // Small-cap focus section
+    const smallCaps = movers.filter((q) =>
+      ["IONQ", "RGTI", "QUBT", "SOUN", "BBAI", "JOBY", "LUNR", "RKLB", "ACHR",
+       "MARA", "RIOT", "HOOD", "AFRM", "UPST", "HIMS", "DNA", "ASTS", "KULR",
+       "BTBT", "HUT", "CIFR", "CLOV", "OPEN", "QS", "GOEV"].includes(q.symbol)
+    );
+    if (smallCaps.length > 0) {
+      dataBlock.push("\n=== SMALL-CAP MOMENTUM (Kingston's Focus) ===");
+      for (const q of smallCaps.slice(0, 10)) {
+        const vol = q.volume > 1e6 ? `${(q.volume / 1e6).toFixed(1)}M` : `${(q.volume / 1e3).toFixed(0)}K`;
+        dataBlock.push(`${q.symbol}: $${fmt(q.price)} (${arrow(q.changePct)}${fmt(q.changePct)}%) Vol:${vol}`);
+      }
     }
 
     const fullData = dataBlock.join("\n");

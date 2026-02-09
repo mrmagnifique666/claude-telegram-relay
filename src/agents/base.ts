@@ -14,6 +14,7 @@ import { getDb } from "../storage/store.js";
 import { clearTurns, clearSession } from "../storage/store.js";
 import { log } from "../utils/log.js";
 import { broadcast } from "../dashboard/broadcast.js";
+import { emitHook } from "../hooks/hooks.js";
 
 const MAX_CONSECUTIVE_ERRORS = 5;
 
@@ -312,6 +313,8 @@ export class Agent {
     clearTurns(this.chatId);
     clearSession(this.chatId);
 
+    await emitHook("agent:cycle:start", { agentId: this.id, cycle: this.cycle, chatId: this.chatId });
+
     try {
       // Prefix prompt with agent identity so Claude knows who it is
       const agentPrompt =
@@ -341,6 +344,7 @@ export class Agent {
 
       logRun(this.id, this.cycle, startTime, durationMs, "success");
       saveState(this);
+      await emitHook("agent:cycle:end", { agentId: this.id, cycle: this.cycle, chatId: this.chatId });
       log.info(`[agent:${this.id}] Cycle ${this.cycle} — completed (${durationMs}ms)`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
